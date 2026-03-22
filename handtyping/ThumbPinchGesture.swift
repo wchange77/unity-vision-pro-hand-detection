@@ -92,21 +92,76 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    /// 目标关节名称
-    var targetJointNames: [HandSkeleton.JointName] {
+    /// 主目标关节（用于距离判定的核心关节）
+    var primaryJointName: HandSkeleton.JointName {
         switch self {
-        case .indexTip:              return [.indexFingerTip]
-        case .indexIntermediateTip:  return [.indexFingerIntermediateTip]
-        case .indexKnuckle:          return [.indexFingerKnuckle]
-        case .middleTip:             return [.middleFingerTip]
-        case .middleIntermediateTip: return [.middleFingerIntermediateTip]
-        case .middleKnuckle:         return [.middleFingerKnuckle]
-        case .ringTip:               return [.ringFingerTip]
-        case .ringIntermediateTip:   return [.ringFingerIntermediateTip]
-        case .ringKnuckle:           return [.ringFingerKnuckle]
-        case .littleTip:             return [.littleFingerTip]
-        case .littleIntermediateTip: return [.littleFingerIntermediateTip]
-        case .littleKnuckle:         return [.littleFingerKnuckle]
+        case .indexTip:              return .indexFingerTip
+        case .indexIntermediateTip:  return .indexFingerIntermediateTip
+        case .indexKnuckle:          return .indexFingerKnuckle
+        case .middleTip:             return .middleFingerTip
+        case .middleIntermediateTip: return .middleFingerIntermediateTip
+        case .middleKnuckle:         return .middleFingerKnuckle
+        case .ringTip:               return .ringFingerTip
+        case .ringIntermediateTip:   return .ringFingerIntermediateTip
+        case .ringKnuckle:           return .ringFingerKnuckle
+        case .littleTip:             return .littleFingerTip
+        case .littleIntermediateTip: return .littleFingerIntermediateTip
+        case .littleKnuckle:         return .littleFingerKnuckle
+        }
+    }
+
+    /// 目标关节名称（仅主目标，兼容旧接口）
+    var targetJointNames: [HandSkeleton.JointName] {
+        [primaryJointName]
+    }
+
+    /// 辅助关节：目标关节周围的相邻关节（用于手势分类消歧）
+    /// 包含：同手指上下相邻关节 + 相邻手指同层级关节
+    var neighborJointNames: [HandSkeleton.JointName] {
+        switch self {
+        // 食指
+        case .indexTip:
+            // 目标：indexTip → 相邻：indexIntermediateTip（下方）, middleTip（相邻手指同层级）
+            return [.indexFingerIntermediateTip, .middleFingerTip]
+        case .indexIntermediateTip:
+            // 目标：indexIntermediate → 相邻：indexTip（上方）, indexKnuckle（下方）, middleIntermediateTip（相邻手指同层级）
+            return [.indexFingerTip, .indexFingerKnuckle, .middleFingerIntermediateTip]
+        case .indexKnuckle:
+            // 目标：indexKnuckle → 相邻：indexIntermediateTip（上方）, middleKnuckle（相邻手指同层级）
+            return [.indexFingerIntermediateTip, .middleFingerKnuckle]
+
+        // 中指
+        case .middleTip:
+            // 目标：middleTip → 相邻：middleIntermediateTip（下方）, indexTip + ringTip（两侧手指同层级）
+            return [.middleFingerIntermediateTip, .indexFingerTip, .ringFingerTip]
+        case .middleIntermediateTip:
+            // 目标：middleIntermediate → 相邻：middleTip（上方）, middleKnuckle（下方）, indexIntermediateTip + ringIntermediateTip
+            return [.middleFingerTip, .middleFingerKnuckle, .indexFingerIntermediateTip, .ringFingerIntermediateTip]
+        case .middleKnuckle:
+            // 目标：middleKnuckle → 相邻：middleIntermediateTip（上方）, indexKnuckle + ringKnuckle
+            return [.middleFingerIntermediateTip, .indexFingerKnuckle, .ringFingerKnuckle]
+
+        // 无名指
+        case .ringTip:
+            // 目标：ringTip → 相邻：ringIntermediateTip（下方）, middleTip + littleTip
+            return [.ringFingerIntermediateTip, .middleFingerTip, .littleFingerTip]
+        case .ringIntermediateTip:
+            // 目标：ringIntermediate → 相邻：ringTip（上方）, ringKnuckle（下方）, middleIntermediateTip + littleIntermediateTip
+            return [.ringFingerTip, .ringFingerKnuckle, .middleFingerIntermediateTip, .littleFingerIntermediateTip]
+        case .ringKnuckle:
+            // 目标���ringKnuckle → 相邻：ringIntermediateTip（上方）, middleKnuckle + littleKnuckle
+            return [.ringFingerIntermediateTip, .middleFingerKnuckle, .littleFingerKnuckle]
+
+        // 小指
+        case .littleTip:
+            // 目标：littleTip → 相邻：littleIntermediateTip（下方）, ringTip
+            return [.littleFingerIntermediateTip, .ringFingerTip]
+        case .littleIntermediateTip:
+            // 目标：littleIntermediate → 相邻：littleTip（上方）, littleKnuckle（下方）, ringIntermediateTip
+            return [.littleFingerTip, .littleFingerKnuckle, .ringFingerIntermediateTip]
+        case .littleKnuckle:
+            // 目标：littleKnuckle → 相邻：littleIntermediateTip（上方）, ringKnuckle
+            return [.littleFingerIntermediateTip, .ringFingerKnuckle]
         }
     }
 
@@ -164,7 +219,38 @@ struct PinchResult: Identifiable, Sendable {
     let gesture: ThumbPinchGesture
     let pinchValue: Float
     let rawDistance: Float
+    /// 相邻关节距离（用于消歧：目标关节距离应该比相邻关节更近）
+    let neighborDistances: [HandSkeleton.JointName: Float]
+    /// 余弦相似度得分（0-1，仅当有参考快照时有效）
+    let cosineSimilarity: Float
+    /// 综合得分（距离+消歧+余弦相似度）
+    let combinedScore: Float
 
     var id: Int { gesture.id }
-    var isPinched: Bool { pinchValue > 0.8 }
+    var isPinched: Bool { combinedScore > 0.75 }
+
+    init(gesture: ThumbPinchGesture, pinchValue: Float, rawDistance: Float,
+         neighborDistances: [HandSkeleton.JointName: Float] = [:],
+         cosineSimilarity: Float = 0, hasReference: Bool = false) {
+        self.gesture = gesture
+        self.pinchValue = pinchValue
+        self.rawDistance = rawDistance
+        self.neighborDistances = neighborDistances
+        self.cosineSimilarity = cosineSimilarity
+
+        // 消歧加成：如果目标关节比所有相邻关节都近，给予加分
+        var disambiguationBonus: Float = 0
+        if !neighborDistances.isEmpty && rawDistance < Float.greatestFiniteMagnitude {
+            let closerCount = neighborDistances.values.filter { $0 > rawDistance }.count
+            // 目标关节比越多相邻关节近，加分越高（最多+0.1）
+            disambiguationBonus = 0.1 * Float(closerCount) / Float(neighborDistances.count)
+        }
+
+        // 如果有参考快照，使用混合得分；否则使用距离得分
+        if hasReference {
+            self.combinedScore = min(1.0, 0.35 * pinchValue + 0.55 * cosineSimilarity + 0.1 * disambiguationBonus * 10)
+        } else {
+            self.combinedScore = min(1.0, pinchValue + disambiguationBonus)
+        }
+    }
 }

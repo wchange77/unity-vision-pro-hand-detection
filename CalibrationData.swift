@@ -4,11 +4,20 @@
 //
 
 import Foundation
+import ARKit
 
 /// 单个手势的校准采样数据
 struct CalibrationSample: Codable, Sendable {
     let gestureRawValue: Int
     let samples: [Float]
+    /// 校准录制期间每帧的完整手势快照（用于余弦相似度比对和ML训练）
+    var handSnapshots: [CHHandJsonModel]
+
+    init(gestureRawValue: Int, samples: [Float], handSnapshots: [CHHandJsonModel] = []) {
+        self.gestureRawValue = gestureRawValue
+        self.samples = samples
+        self.handSnapshots = handSnapshots
+    }
 
     var gesture: ThumbPinchGesture? {
         ThumbPinchGesture(rawValue: gestureRawValue)
@@ -34,17 +43,30 @@ struct CalibrationSample: Codable, Sendable {
         samples.max() ?? 0
     }
 
+    /// 获取代表性快照（取中间帧，距离最接近均值的帧）
+    var representativeSnapshot: CHHandJsonModel? {
+        guard !handSnapshots.isEmpty, !samples.isEmpty else { return nil }
+        let m = mean
+        var bestIndex = 0
+        var bestDiff: Float = .greatestFiniteMagnitude
+        for (i, s) in samples.enumerated() where i < handSnapshots.count {
+            let diff = abs(s - m)
+            if diff < bestDiff {
+                bestDiff = diff
+                bestIndex = i
+            }
+        }
+        return handSnapshots[bestIndex]
+    }
+
     /// 基于统计数据生成个性化阈值
     func derivedPinchConfig() -> PinchConfig {
         guard !samples.isEmpty, let gesture else {
             return ThumbPinchGesture.indexTip.pinchConfig
         }
-        // minDistance = 均值 - 1.5倍标准差（允许更紧凑的捏合）
-        // maxDistance = 均值 + 2倍标准差（允许更宽松的开始检测）
         let derivedMin = max(mean - 1.5 * stdDev, minRecorded * 0.8)
         let derivedMax = mean + 2.0 * stdDev
 
-        // 确保不低于原始阈值的最小值
         let fallback = gesture.pinchConfig
         let finalMin = max(derivedMin, fallback.minDistance * 0.5)
         let finalMax = max(derivedMax, finalMin + 0.01)
@@ -59,12 +81,15 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
     let date: Date
     var name: String
     let samples: [CalibrationSample]
+    /// 训练好的 CoreML 模型文件名（相对于配置目录）
+    var mlModelFileName: String?
 
     init(name: String, samples: [CalibrationSample]) {
         self.id = UUID()
         self.date = Date()
         self.name = name
         self.samples = samples
+        self.mlModelFileName = nil
     }
 
     func pinchConfig(for gesture: ThumbPinchGesture) -> PinchConfig {
@@ -78,13 +103,48 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
         samples.first(where: { $0.gestureRawValue == gesture.rawValue })
     }
 
+    /// 获取指定手势的代表性 CHHandInfo 快照（用于余弦相似度比对）
+    func referenceHandInfo(for gesture: ThumbPinchGesture) -> CHHandInfo? {
+        sample(for: gesture)?.representativeSnapshot?.convertToCHHandInfo()
+    }
+
+    /// 获取所有手势的代表性快照
+    func allReferenceHandInfos() -> [ThumbPinchGesture: CHHandInfo] {
+        var result: [ThumbPinchGesture: CHHandInfo] = [:]
+        for gesture in ThumbPinchGesture.allCases {
+            if let info = referenceHandInfo(for: gesture) {
+                result[gesture] = info
+            }
+        }
+        return result
+    }
+
+    /// ML 模型文件 URL
+    var mlModelURL: URL? {
+        guard let fileName = mlModelFileName else { return nil }
+        return Self.profilesDirectory.appendingPathComponent(fileName)
+    }
+
+    // MARK: - 自动命名
+
+    /// 生成下一个自动序列名称
+    static func nextAutoName() -> String {
+        let existing = listAll()
+        let maxNumber = existing.compactMap { profile -> Int? in
+            // 匹配 "校准-N" 格式
+            guard profile.name.hasPrefix("校准-") else { return nil }
+            return Int(profile.name.dropFirst(3))
+        }.max() ?? 0
+        return "校准-\(maxNumber + 1)"
+    }
+
     // MARK: - 持久化
 
     private static var documentsURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
 
-    private static var profilesDirectory: URL {
+    static var profilesDirectory: URL {
         let dir = documentsURL.appendingPathComponent("CalibrationProfiles")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
@@ -117,9 +177,18 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
     static func delete(id: UUID) {
         let url = profilesDirectory.appendingPathComponent("\(id.uuidString).json")
         try? FileManager.default.removeItem(at: url)
+        // Also delete associated ML model
+        if let profile = load(id: id), let mlURL = profile.mlModelURL {
+            try? FileManager.default.removeItem(at: mlURL)
+        }
         if loadActiveProfileId() == id {
             clearActiveProfile()
         }
+    }
+
+    /// 检查是否有任何已保存的校准配置
+    static func hasAnyProfile() -> Bool {
+        !listAll().isEmpty
     }
 
     // MARK: - 活跃配置

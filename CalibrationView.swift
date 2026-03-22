@@ -16,6 +16,7 @@ enum CalibrationState: Equatable {
 }
 
 /// 引导式校准向导界面
+/// 全程通过捏合手势推进，不需要触碰任何按钮
 struct CalibrationView: View {
     @Environment(HandViewModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -23,34 +24,44 @@ struct CalibrationView: View {
     @State private var state: CalibrationState = .idle
     @State private var currentGestureIndex: Int = 0
     @State private var collectedSamples: [Int: [Float]] = [:]  // gestureRawValue -> samples
+    @State private var collectedSnapshots: [Int: [CHHandJsonModel]] = [:]  // gestureRawValue -> snapshots
     @State private var profileName: String = ""
     @State private var savedProfiles: [CalibrationProfile] = []
     @State private var countdownTimer: Timer?
     @State private var recordingTimer: Timer?
+    /// 防抖：避免捏合过快连续触发
+    @State private var lastPinchTriggerTime: TimeInterval = 0
+    private let pinchTriggerDebounce: TimeInterval = 1.0
 
     private let allGestures = ThumbPinchGesture.allCases
 
     var body: some View {
-        VStack(spacing: 0) {
-            headerBar
-            Divider().overlay(CyberpunkTheme.neonCyan.opacity(0.3))
+        @Bindable var model = model
+        // TimelineView drives pinch detection polling for gesture-driven navigation
+        TimelineView(.periodic(from: .now, by: 0.033)) { context in
+            let _ = context.date
+            let _ = { model.flushPinchDataToUI() }()
+            VStack(spacing: 0) {
+                headerBar
+                Divider().overlay(CyberpunkTheme.neonCyan.opacity(0.3))
 
-            switch state {
-            case .idle:
-                idleView
-            case .countdown(let gesture, let remaining):
-                countdownView(gesture: gesture, remaining: remaining)
-            case .recording(let gesture):
-                recordingView(gesture: gesture)
-            case .review:
-                reviewView
-            case .complete:
-                completeView
-            case .profileList:
-                profileListView
+                switch state {
+                case .idle:
+                    idleView
+                case .countdown(let gesture, let remaining):
+                    countdownView(gesture: gesture, remaining: remaining)
+                case .recording(let gesture):
+                    recordingView(gesture: gesture)
+                case .review:
+                    reviewView
+                case .complete:
+                    completeView
+                case .profileList:
+                    profileListView
+                }
+
+                Spacer(minLength: 0)
             }
-
-            Spacer(minLength: 0)
         }
         .frame(minWidth: 700, minHeight: 500)
         .background(CyberpunkTheme.darkBg.opacity(0.6))
@@ -61,6 +72,25 @@ struct CalibrationView: View {
             stopAllTimers()
             model.stopCalibrationRecording()
         }
+    }
+
+    // MARK: - Pinch Detection Helper
+
+    /// 检测是否有任何手做了捏合动作（用于推进校准流程）
+    private var anyHandPinched: Bool {
+        let allSummaries = model.leftPinchSummaries.merging(model.rightPinchSummaries) { l, r in
+            l.isPinched ? l : r
+        }
+        return allSummaries.values.contains { $0.isPinched }
+    }
+
+    /// 检测是否有捏合并进行防抖处理
+    private func checkPinchTrigger() -> Bool {
+        guard anyHandPinched else { return false }
+        let now = CACurrentMediaTime()
+        guard now - lastPinchTriggerTime > pinchTriggerDebounce else { return false }
+        lastPinchTriggerTime = now
+        return true
     }
 
     // MARK: - Header
@@ -79,6 +109,7 @@ struct CalibrationView: View {
                     model.stopCalibrationRecording()
                     state = .idle
                     collectedSamples = [:]
+                    collectedSnapshots = [:]
                     currentGestureIndex = 0
                 }
                 .buttonStyle(CyberpunkButtonStyle(color: .red))
@@ -122,7 +153,7 @@ struct CalibrationView: View {
             VStack(alignment: .leading, spacing: 6) {
                 infoRow("1", "每个手势有3秒准备 + 3秒录制")
                 infoRow("2", "录制期间请保持拇指捏合目标关节")
-                infoRow("3", "完成后可命名保存，支持多组配置")
+                infoRow("3", "全程看着屏幕，用捏合手势推进")
             }
             .padding()
             .background(
@@ -135,18 +166,24 @@ struct CalibrationView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle")
                         .foregroundColor(CyberpunkTheme.neonYellow)
-                    Text("请先开启手部追踪")
+                    Text("等待手部追踪启动...")
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundColor(CyberpunkTheme.neonYellow)
                 }
-            }
+            } else {
+                // Pinch-to-start prompt with pulse animation
+                Text("捏合任意手势开始校准 ▶")
+                    .font(.system(size: 16, weight: .bold, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .neonGlow(color: CyberpunkTheme.neonGreen, radius: 6)
 
-            Button("开始校准") {
-                startCalibration()
+                // Detect pinch to start
+                let _ = {
+                    if checkPinchTrigger() {
+                        startCalibration()
+                    }
+                }()
             }
-            .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonGreen))
-            .disabled(!model.turnOnImmersiveSpace)
-            .opacity(model.turnOnImmersiveSpace ? 1 : 0.4)
 
             Spacer()
         }
@@ -276,34 +313,20 @@ struct CalibrationView: View {
             Divider().overlay(CyberpunkTheme.neonCyan.opacity(0.2))
 
             HStack(spacing: 12) {
-                Text("配置名称:")
+                Text("配置已自动保存为「\(profileName)」")
                     .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.gray)
+                    .foregroundColor(CyberpunkTheme.neonGreen)
 
-                TextField("输入名称", text: $profileName)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 14, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonCyan)
-                    .frame(width: 200)
-                    .padding(6)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(CyberpunkTheme.neonCyan.opacity(0.3), lineWidth: 0.5)
-                            .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(0.3)))
-                    )
+                Spacer()
 
-                Button("保存并激活") {
-                    saveProfile()
-                }
-                .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonGreen))
-                .disabled(profileName.isEmpty)
-
-                Button("放弃") {
+                Button("返回") {
                     state = .idle
                     collectedSamples = [:]
+                    collectedSnapshots = [:]
                     currentGestureIndex = 0
+                    profileName = ""
                 }
-                .buttonStyle(CyberpunkButtonStyle(color: .gray))
+                .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonCyan))
             }
             .padding()
         }
@@ -357,15 +380,86 @@ struct CalibrationView: View {
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.gray)
 
-            Button("返回") {
-                state = .idle
-                collectedSamples = [:]
-                currentGestureIndex = 0
-                profileName = ""
-            }
-            .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonCyan))
+            // ML 训练状态显示
+            mlTrainingStatusView
+
+            Text("捏合任意手势返回 ▶")
+                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                .foregroundColor(CyberpunkTheme.accentAmber)
+                .neonGlow(color: CyberpunkTheme.accentAmber, radius: 4)
+
+            // Detect pinch to go back
+            let _ = {
+                if checkPinchTrigger() {
+                    state = .idle
+                    collectedSamples = [:]
+                    collectedSnapshots = [:]
+                    currentGestureIndex = 0
+                    profileName = ""
+                }
+            }()
 
             Spacer()
+        }
+    }
+
+    // MARK: - ML Training Status
+
+    private var mlTrainingStatusView: some View {
+        HStack(spacing: 8) {
+            switch model.mlTrainingState {
+            case .idle:
+                Image(systemName: "brain")
+                    .foregroundColor(.gray)
+                Text("ML模型：未训练")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.gray)
+            case .preparing:
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text("ML模型：准备训练数据...")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonYellow)
+            case .training(let progress):
+                ProgressView()
+                    .scaleEffect(0.7)
+                Text(String(format: "ML模型：训练中 %.0f%%", progress * 100))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonCyan)
+            case .completed(let accuracy):
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+                Text(String(format: "ML模型：训练完成 (准确率: %.1f%%)", accuracy * 100))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+            case .failed(let message):
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                Text("ML模型：训练失败 - \(message)")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(.red)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.03))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(mlTrainingBorderColor.opacity(0.3), lineWidth: 0.5)
+        )
+    }
+
+    private var mlTrainingBorderColor: Color {
+        switch model.mlTrainingState {
+        case .idle: return .gray
+        case .preparing: return CyberpunkTheme.neonYellow
+        case .training: return CyberpunkTheme.neonCyan
+        case .completed: return CyberpunkTheme.neonGreen
+        case .failed: return .red
         }
     }
 
@@ -529,6 +623,7 @@ struct CalibrationView: View {
 
     private func startCalibration() {
         collectedSamples = [:]
+        collectedSnapshots = [:]
         currentGestureIndex = 0
         profileName = ""
         startCountdown(for: allGestures[0])
@@ -560,26 +655,51 @@ struct CalibrationView: View {
     }
 
     private func finishRecording(for gesture: ThumbPinchGesture) {
-        let samples = model.stopCalibrationRecording()
-        collectedSamples[gesture.rawValue] = samples
+        let result = model.stopCalibrationRecording()
+        collectedSamples[gesture.rawValue] = result.samples
+        collectedSnapshots[gesture.rawValue] = result.snapshots
 
         currentGestureIndex += 1
 
         if currentGestureIndex < allGestures.count {
             startCountdown(for: allGestures[currentGestureIndex])
         } else {
-            state = .review
+            // 自动保存并激活
+            autoSaveProfile()
         }
     }
 
-    private func saveProfile() {
+    private func autoSaveProfile() {
+        let autoName = CalibrationProfile.nextAutoName()
+        profileName = autoName
         let samples = collectedSamples.map { (rawValue, floats) in
-            CalibrationSample(gestureRawValue: rawValue, samples: floats)
+            CalibrationSample(
+                gestureRawValue: rawValue,
+                samples: floats,
+                handSnapshots: collectedSnapshots[rawValue] ?? []
+            )
         }
-        let profile = CalibrationProfile(name: profileName, samples: samples)
+        var profile = CalibrationProfile(name: autoName, samples: samples)
         try? profile.save()
         CalibrationProfile.saveActiveProfileId(profile.id)
         model.activeProfile = profile
+        model.referenceHandInfos = profile.allReferenceHandInfos()
+
+        // 触发 ML 模型训练
+        model.mlTrainingState = .preparing
+        Task {
+            let modelURL = await model.mlTrainer.train(profile: profile)
+            await MainActor.run {
+                model.mlTrainingState = model.mlTrainer.state
+                if let url = modelURL {
+                    // 保存模型路径到配置
+                    profile.mlModelFileName = url.lastPathComponent
+                    try? profile.save()
+                    model.activeProfile = profile
+                }
+            }
+        }
+
         state = .complete
     }
 

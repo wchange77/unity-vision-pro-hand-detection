@@ -8,6 +8,9 @@
 
 /* Begin PBXBuildFile section */
 		9A9B4ABD2F6E3BAA00513B05 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 9A9B4ABC2F6E3BAA00513B05 /* RealityKitContent */; };
+		9AD1CF062F6FE60600E81CEE /* GestureMLTrainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD1CF052F6FE60600E81CEE /* GestureMLTrainer.swift */; };
+		9AD1CF082F6FE7ED00E81CEE /* GameSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD1CF072F6FE7ED00E81CEE /* GameSelectionView.swift */; };
+		9AD1CF0A2F6FE81100E81CEE /* GamePlaceholderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD1CF092F6FE81100E81CEE /* GamePlaceholderView.swift */; };
 		9AF7FD1C2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD1B2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift */; };
 		9AF7FD1E2F6E8A2300E53BD4 /* CyberpunkTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD1D2F6E8A2300E53BD4 /* CyberpunkTheme.swift */; };
 		9AF7FD202F6E8A2400E53BD4 /* GlitchEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD1F2F6E8A2400E53BD4 /* GlitchEffects.swift */; };
@@ -31,6 +34,9 @@
 		9A9B4AB72F6E3BAA00513B05 /* handtyping.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = handtyping.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A9B4ABB2F6E3BAA00513B05 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
 		9A9B4ACB2F6E3BAB00513B05 /* handtypingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = handtypingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9AD1CF052F6FE60600E81CEE /* GestureMLTrainer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureMLTrainer.swift; sourceTree = "<group>"; };
+		9AD1CF072F6FE7ED00E81CEE /* GameSelectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameSelectionView.swift; sourceTree = "<group>"; };
+		9AD1CF092F6FE81100E81CEE /* GamePlaceholderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GamePlaceholderView.swift; sourceTree = "<group>"; };
 		9AF7FD1B2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchDetectionImmersiveView.swift; sourceTree = "<group>"; };
 		9AF7FD1D2F6E8A2300E53BD4 /* CyberpunkTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CyberpunkTheme.swift; sourceTree = "<group>"; };
 		9AF7FD1F2F6E8A2400E53BD4 /* GlitchEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlitchEffects.swift; sourceTree = "<group>"; };
@@ -99,6 +105,9 @@
 				9AF7FD232F6E8B6000E53BD4 /* CalibrationData.swift */,
 				9AF7FD252F6E8C2000E53BD4 /* CalibrationWaveView.swift */,
 				9AF7FD272F6E8C7E00E53BD4 /* CalibrationView.swift */,
+				9AD1CF052F6FE60600E81CEE /* GestureMLTrainer.swift */,
+				9AD1CF072F6FE7ED00E81CEE /* GameSelectionView.swift */,
+				9AD1CF092F6FE81100E81CEE /* GamePlaceholderView.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -232,6 +241,9 @@
 			files = (
 				9AF7FD282F6E8C7E00E53BD4 /* CalibrationView.swift in Sources */,
 				9AF7FD202F6E8A2400E53BD4 /* GlitchEffects.swift in Sources */,
+				9AD1CF062F6FE60600E81CEE /* GestureMLTrainer.swift in Sources */,
+				9AD1CF082F6FE7ED00E81CEE /* GameSelectionView.swift in Sources */,
+				9AD1CF0A2F6FE81100E81CEE /* GamePlaceholderView.swift in Sources */,
 				9AF7FD222F6E8A6900E53BD4 /* HandIllustrationView.swift in Sources */,
 				9AF7FD1C2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift in Sources */,
 				9AF7FD1E2F6E8A2300E53BD4 /* CyberpunkTheme.swift in Sources */,

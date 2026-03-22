@@ -30,6 +30,20 @@ struct handtypingApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
 
+        WindowGroup(id: "gameSelection") {
+            GameSelectionView()
+                .environment(model)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
+
+        WindowGroup(id: "gamePlaying") {
+            GamePlaceholderView()
+                .environment(model)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
+
         ImmersiveSpace(id: "pinchDetection") {
             PinchDetectionImmersiveView()
                 .environment(model)

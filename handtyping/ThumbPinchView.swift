@@ -73,23 +73,7 @@ struct ThumbPinchView: View {
 
             Spacer()
 
-            // Controls
-            Toggle(isOn: $m.turnOnImmersiveSpace) {
-                Label("Hand Tracking", systemImage: "hand.raised.fingers.spread")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .toggleStyle(.button)
-            .tint(CyberpunkTheme.accentBlue)
-
-            Toggle(isOn: $m.isSkeletonVisible) {
-                Label("Skeleton", systemImage: "hand.raised.fingers.spread")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .toggleStyle(.button)
-            .tint(CyberpunkTheme.accentPink)
-            .disabled(!model.turnOnImmersiveSpace)
-            .opacity(model.turnOnImmersiveSpace ? 1 : 0.5)
-
+            // Calibrate button — opens profile management
             Button {
                 openWindow(id: "calibration")
             } label: {
@@ -97,6 +81,15 @@ struct ThumbPinchView: View {
                     .font(.system(size: 13, weight: .medium))
             }
             .tint(CyberpunkTheme.accentAmber)
+
+            // Game button — opens game selection
+            Button {
+                openWindow(id: "gameSelection")
+            } label: {
+                Label("Game", systemImage: "gamecontroller")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .tint(CyberpunkTheme.accentGreen)
 
             Spacer()
 
@@ -110,9 +103,46 @@ struct ThumbPinchView: View {
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
+
+            // ML Training status indicator
+            mlTrainingIndicator(state: model.mlTrainingState)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+    }
+
+    @ViewBuilder
+    private func mlTrainingIndicator(state: GestureMLTrainer.TrainingState) -> some View {
+        HStack(spacing: 4) {
+            switch state {
+            case .idle:
+                EmptyView()
+            case .preparing:
+                ProgressView().scaleEffect(0.5)
+                Text("准备训练")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonYellow)
+            case .training(let progress):
+                ProgressView().scaleEffect(0.5)
+                Text(String(format: "训练 %.0f%%", progress * 100))
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonCyan)
+            case .completed:
+                Image(systemName: "brain.filled.head.profile")
+                    .font(.system(size: 10))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+                Text("ML就绪")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+            case .failed:
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 10))
+                    .foregroundColor(.red)
+                Text("ML失败")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(.red)
+            }
+        }
     }
 }
 
