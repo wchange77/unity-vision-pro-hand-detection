@@ -10,24 +10,30 @@ import SwiftUI
 @main
 struct handtypingApp: App {
 
-    @State private var appModel = AppModel()
+    @State private var model = HandViewModel()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environment(appModel)
-        }
-
-        ImmersiveSpace(id: appModel.immersiveSpaceID) {
-            ImmersiveView()
-                .environment(appModel)
+                .environment(model)
                 .onAppear {
-                    appModel.immersiveSpaceState = .open
-                }
-                .onDisappear {
-                    appModel.immersiveSpaceState = .closed
+                    model.loadActiveCalibration()
                 }
         }
-        .immersionStyle(selection: .constant(.full), in: .full)
+        .windowResizability(.contentSize)
+        .defaultSize(width: 1, height: 0.6, depth: 0.1, in: .meters)
+
+        WindowGroup(id: "calibration") {
+            CalibrationView()
+                .environment(model)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
+
+        ImmersiveSpace(id: "pinchDetection") {
+            PinchDetectionImmersiveView()
+                .environment(model)
+        }
+        .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }
 }

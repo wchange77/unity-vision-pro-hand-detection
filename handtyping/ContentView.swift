@@ -6,25 +6,29 @@
 //
 
 import SwiftUI
-import RealityKit
-import RealityKitContent
 
 struct ContentView: View {
+    @Environment(HandViewModel.self) private var model
+    @Environment(\.openImmersiveSpace) var openImmersiveSpace
+    @Environment(\.dismissImmersiveSpace) var dismissImmersiveSpace
 
     var body: some View {
-        VStack {
-            Model3D(named: "Scene", bundle: realityKitContentBundle)
-                .padding(.bottom, 50)
-
-            Text("Hello, world!")
-
-            ToggleImmersiveSpaceButton()
-        }
-        .padding()
+        ThumbPinchView()
+            .glassBackgroundEffect()
+            .onChange(of: model.turnOnImmersiveSpace) { _, newValue in
+                Task {
+                    if newValue {
+                        await openImmersiveSpace(id: "pinchDetection")
+                    } else {
+                        await dismissImmersiveSpace()
+                        model.reset()
+                    }
+                }
+            }
     }
 }
 
 #Preview(windowStyle: .automatic) {
     ContentView()
-        .environment(AppModel())
+        .environment(HandViewModel())
 }
