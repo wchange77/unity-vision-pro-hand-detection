@@ -293,14 +293,15 @@ public class ChimetaHandgameManager {
         var currentHighlighted: [String: (value: Float, pinched: Bool)] = [:]
         for (gesture, result) in results {
             guard result.pinchValue > 0.1 else { continue }
+            let isPinched = result.pinchValue > 0.75
             for jointName in gesture.targetJointNames {
                 let key = jointName.codableName.rawValue
                 if let existing = currentHighlighted[key] {
                     if result.pinchValue > existing.value {
-                        currentHighlighted[key] = (result.pinchValue, result.isPinched)
+                        currentHighlighted[key] = (result.pinchValue, isPinched)
                     }
                 } else {
-                    currentHighlighted[key] = (result.pinchValue, result.isPinched)
+                    currentHighlighted[key] = (result.pinchValue, isPinched)
                 }
             }
         }

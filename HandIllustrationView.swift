@@ -120,7 +120,7 @@ struct HandIllustrationView: View {
             for gesture in fingerGroup.gestures {
                 let p = pt(HandJointLayout.targetPoint(for: gesture))
                 let pinchValue = results[gesture]?.pinchValue ?? 0
-                let isPinched = results[gesture]?.isPinched ?? false
+                let isPinched = pinchValue > 0.75
 
                 let dotSize: CGFloat = isPinched ? 5 : 3
                 let dotColor: Color = isPinched ? CyberpunkTheme.neonGreen : groupColor.opacity(max(0.4, Double(pinchValue)))

@@ -7,6 +7,21 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		9A310A712F7001B500E693C0 /* MLTrainingExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A702F7001B500E693C0 /* MLTrainingExport.swift */; };
+		9A310A732F70024400E693C0 /* DebugMLDataCollectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A722F70024400E693C0 /* DebugMLDataCollectionView.swift */; };
+		9A310A782F70050F00E693C0 /* MLHandPoseConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A772F70050F00E693C0 /* MLHandPoseConverter.swift */; };
+		9A310A822F7013FE00E693C0 /* MLModelDocumentation.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A812F7013FE00E693C0 /* MLModelDocumentation.md */; };
+		9A310A842F70158A00E693C0 /* 训练步骤说明.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A832F70158A00E693C0 /* 训练步骤说明.md */; };
+		9A310A872F70267C00E693C0 /* MLTrainingDataFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A862F70267C00E693C0 /* MLTrainingDataFormat.swift */; };
+		9A310A892F70268E00E693C0 /* MLDataCollector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A882F70268E00E693C0 /* MLDataCollector.swift */; };
+		9A310A8D2F7026D200E693C0 /* ML_PIPELINE.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A8C2F7026D200E693C0 /* ML_PIPELINE.md */; };
+		9A310A8F2F7026E600E693C0 /* QUICKSTART.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A8E2F7026E600E693C0 /* QUICKSTART.md */; };
+		9A310A912F70270A00E693C0 /* REFACTOR_SUMMARY.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A902F70270900E693C0 /* REFACTOR_SUMMARY.md */; };
+		9A310A932F702FF200E693C0 /* GestureClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A922F702FF200E693C0 /* GestureClassifier.swift */; };
+		9A310A952F70375800E693C0 /* PureMLView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A942F70375800E693C0 /* PureMLView.swift */; };
+		9A310A972F703E6500E693C0 /* MLDistanceConverter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A962F703E6500E693C0 /* MLDistanceConverter.swift */; };
+		9A310A992F703E7C00E693C0 /* MLDistanceTrainingFormat.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A982F703E7C00E693C0 /* MLDistanceTrainingFormat.swift */; };
+		9A310A9C2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A9B2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md */; };
 		9A9B4ABD2F6E3BAA00513B05 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 9A9B4ABC2F6E3BAA00513B05 /* RealityKitContent */; };
 		9AD1CF062F6FE60600E81CEE /* GestureMLTrainer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD1CF052F6FE60600E81CEE /* GestureMLTrainer.swift */; };
 		9AD1CF082F6FE7ED00E81CEE /* GameSelectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AD1CF072F6FE7ED00E81CEE /* GameSelectionView.swift */; };
@@ -31,6 +46,29 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		9A310A702F7001B500E693C0 /* MLTrainingExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLTrainingExport.swift; sourceTree = "<group>"; };
+		9A310A722F70024400E693C0 /* DebugMLDataCollectionView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugMLDataCollectionView.swift; sourceTree = "<group>"; };
+		9A310A752F70048000E693C0 /* MLTrainingDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLTrainingDataModels.swift; sourceTree = "<group>"; };
+		9A310A762F7004EC00E693C0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
+		9A310A772F70050F00E693C0 /* MLHandPoseConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLHandPoseConverter.swift; sourceTree = "<group>"; };
+		9A310A812F7013FE00E693C0 /* MLModelDocumentation.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MLModelDocumentation.md; sourceTree = "<group>"; };
+		9A310A832F70158A00E693C0 /* 训练步骤说明.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "训练步骤说明.md"; sourceTree = "<group>"; };
+		9A310A852F701C5C00E693C0 /* DataCleaner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataCleaner.swift; sourceTree = "<group>"; };
+		9A310A862F70267C00E693C0 /* MLTrainingDataFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLTrainingDataFormat.swift; sourceTree = "<group>"; };
+		9A310A882F70268E00E693C0 /* MLDataCollector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLDataCollector.swift; sourceTree = "<group>"; };
+		9A310A8A2F7026AA00E693C0 /* train_quaternion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = train_quaternion.swift; sourceTree = "<group>"; };
+		9A310A8B2F7026B400E693C0 /* MLTrainingDataModels_Mac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLTrainingDataModels_Mac.swift; sourceTree = "<group>"; };
+		9A310A8C2F7026D200E693C0 /* ML_PIPELINE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ML_PIPELINE.md; sourceTree = "<group>"; };
+		9A310A8E2F7026E600E693C0 /* QUICKSTART.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUICKSTART.md; sourceTree = "<group>"; };
+		9A310A902F70270900E693C0 /* REFACTOR_SUMMARY.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = REFACTOR_SUMMARY.md; sourceTree = "<group>"; };
+		9A310A922F702FF200E693C0 /* GestureClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureClassifier.swift; sourceTree = "<group>"; };
+		9A310A942F70375800E693C0 /* PureMLView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PureMLView.swift; sourceTree = "<group>"; };
+		9A310A962F703E6500E693C0 /* MLDistanceConverter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLDistanceConverter.swift; sourceTree = "<group>"; };
+		9A310A982F703E7C00E693C0 /* MLDistanceTrainingFormat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLDistanceTrainingFormat.swift; sourceTree = "<group>"; };
+		9A310A9A2F703F0200E693C0 /* train_distance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = train_distance.swift; sourceTree = "<group>"; };
+		9A310A9B2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DISTANCE_MODEL_TRAINING.md; sourceTree = "<group>"; };
+		9A310A9D2F70403D00E693C0 /* convert_to_csv.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = convert_to_csv.py; sourceTree = "<group>"; };
+		9A310A9E2F70404900E693C0 /* train_simple.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = train_simple.swift; sourceTree = "<group>"; };
 		9A9B4AB72F6E3BAA00513B05 /* handtyping.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = handtyping.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A9B4ABB2F6E3BAA00513B05 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
 		9A9B4ACB2F6E3BAB00513B05 /* handtypingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = handtypingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -91,6 +129,21 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		9A310A742F70045100E693C0 /* MLTrainingTool 2 */ = {
+			isa = PBXGroup;
+			children = (
+				9A310A752F70048000E693C0 /* MLTrainingDataModels.swift */,
+				9A310A762F7004EC00E693C0 /* main.swift */,
+				9A310A852F701C5C00E693C0 /* DataCleaner.swift */,
+				9A310A8A2F7026AA00E693C0 /* train_quaternion.swift */,
+				9A310A8B2F7026B400E693C0 /* MLTrainingDataModels_Mac.swift */,
+				9A310A9A2F703F0200E693C0 /* train_distance.swift */,
+				9A310A9D2F70403D00E693C0 /* convert_to_csv.py */,
+				9A310A9E2F70404900E693C0 /* train_simple.swift */,
+			);
+			path = "MLTrainingTool 2";
+			sourceTree = "<group>";
+		};
 		9A9B4AAE2F6E3BAA00513B05 = {
 			isa = PBXGroup;
 			children = (
@@ -108,6 +161,22 @@
 				9AD1CF052F6FE60600E81CEE /* GestureMLTrainer.swift */,
 				9AD1CF072F6FE7ED00E81CEE /* GameSelectionView.swift */,
 				9AD1CF092F6FE81100E81CEE /* GamePlaceholderView.swift */,
+				9A310A702F7001B500E693C0 /* MLTrainingExport.swift */,
+				9A310A722F70024400E693C0 /* DebugMLDataCollectionView.swift */,
+				9A310A742F70045100E693C0 /* MLTrainingTool 2 */,
+				9A310A772F70050F00E693C0 /* MLHandPoseConverter.swift */,
+				9A310A812F7013FE00E693C0 /* MLModelDocumentation.md */,
+				9A310A832F70158A00E693C0 /* 训练步骤说明.md */,
+				9A310A862F70267C00E693C0 /* MLTrainingDataFormat.swift */,
+				9A310A882F70268E00E693C0 /* MLDataCollector.swift */,
+				9A310A8C2F7026D200E693C0 /* ML_PIPELINE.md */,
+				9A310A8E2F7026E600E693C0 /* QUICKSTART.md */,
+				9A310A902F70270900E693C0 /* REFACTOR_SUMMARY.md */,
+				9A310A922F702FF200E693C0 /* GestureClassifier.swift */,
+				9A310A942F70375800E693C0 /* PureMLView.swift */,
+				9A310A962F703E6500E693C0 /* MLDistanceConverter.swift */,
+				9A310A982F703E7C00E693C0 /* MLDistanceTrainingFormat.swift */,
+				9A310A9B2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -222,6 +291,12 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9A310A8D2F7026D200E693C0 /* ML_PIPELINE.md in Resources */,
+				9A310A9C2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md in Resources */,
+				9A310A842F70158A00E693C0 /* 训练步骤说明.md in Resources */,
+				9A310A822F7013FE00E693C0 /* MLModelDocumentation.md in Resources */,
+				9A310A912F70270A00E693C0 /* REFACTOR_SUMMARY.md in Resources */,
+				9A310A8F2F7026E600E693C0 /* QUICKSTART.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -241,12 +316,21 @@
 			files = (
 				9AF7FD282F6E8C7E00E53BD4 /* CalibrationView.swift in Sources */,
 				9AF7FD202F6E8A2400E53BD4 /* GlitchEffects.swift in Sources */,
+				9A310A972F703E6500E693C0 /* MLDistanceConverter.swift in Sources */,
 				9AD1CF062F6FE60600E81CEE /* GestureMLTrainer.swift in Sources */,
+				9A310A952F70375800E693C0 /* PureMLView.swift in Sources */,
 				9AD1CF082F6FE7ED00E81CEE /* GameSelectionView.swift in Sources */,
 				9AD1CF0A2F6FE81100E81CEE /* GamePlaceholderView.swift in Sources */,
 				9AF7FD222F6E8A6900E53BD4 /* HandIllustrationView.swift in Sources */,
 				9AF7FD1C2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift in Sources */,
 				9AF7FD1E2F6E8A2300E53BD4 /* CyberpunkTheme.swift in Sources */,
+				9A310A712F7001B500E693C0 /* MLTrainingExport.swift in Sources */,
+				9A310A732F70024400E693C0 /* DebugMLDataCollectionView.swift in Sources */,
+				9A310A782F70050F00E693C0 /* MLHandPoseConverter.swift in Sources */,
+				9A310A932F702FF200E693C0 /* GestureClassifier.swift in Sources */,
+				9A310A892F70268E00E693C0 /* MLDataCollector.swift in Sources */,
+				9A310A872F70267C00E693C0 /* MLTrainingDataFormat.swift in Sources */,
+				9A310A992F703E7C00E693C0 /* MLDistanceTrainingFormat.swift in Sources */,
 				9AF7FD242F6E8B6000E53BD4 /* CalibrationData.swift in Sources */,
 				9AF7FD262F6E8C2000E53BD4 /* CalibrationWaveView.swift in Sources */,
 			);

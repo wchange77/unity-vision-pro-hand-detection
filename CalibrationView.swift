@@ -2,58 +2,94 @@
 //  CalibrationView.swift
 //  handtyping
 //
+//  ML-driven quick calibration — free-form gesture collection
+//  powered by the pre-trained HandGesture ML model.
+//
 
 import SwiftUI
 
-/// 校准向导状态机
+// MARK: - State Enums
+
+/// Top-level calibration state machine
 enum CalibrationState: Equatable {
-    case idle
-    case countdown(gesture: ThumbPinchGesture, remaining: Int)
-    case recording(gesture: ThumbPinchGesture)
-    case review
-    case complete
-    case profileList
+    case welcome       // Introduction screen
+    case recording     // Recording a specific gesture
+    case complete      // Done, show summary
+    case profileList   // Manage saved profiles
 }
 
-/// 引导式校准向导界面
-/// 全程通过捏合手势推进，不需要触碰任何按钮
+/// Per-gesture calibration status
+enum GestureCalibrationStatus: Equatable {
+    case pending
+    case recording(startTime: TimeInterval)
+    case completed(sampleCount: Int)
+
+    var isCompleted: Bool {
+        if case .completed = self { return true }
+        return false
+    }
+}
+
+// MARK: - CalibrationView
+
 struct CalibrationView: View {
     @Environment(HandViewModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
-    @State private var state: CalibrationState = .idle
+    @State private var state: CalibrationState = .welcome
+    @State private var gestureStatuses: [ThumbPinchGesture: GestureCalibrationStatus] = {
+        var dict: [ThumbPinchGesture: GestureCalibrationStatus] = [:]
+        for g in ThumbPinchGesture.allCases { dict[g] = .pending }
+        return dict
+    }()
+
+    @State private var collectedSamples: [Int: [Float]] = [:]
+    @State private var collectedSnapshots: [Int: [CHHandJsonModel]] = [:]
     @State private var currentGestureIndex: Int = 0
-    @State private var collectedSamples: [Int: [Float]] = [:]  // gestureRawValue -> samples
-    @State private var collectedSnapshots: [Int: [CHHandJsonModel]] = [:]  // gestureRawValue -> snapshots
+    @State private var recordingStartTime: TimeInterval = 0
+    @State private var preparationStartTime: TimeInterval = 0
+    @State private var isInPreparation: Bool = false
+    @State private var initialCountdownStartTime: TimeInterval = 0
+    @State private var showInitialCountdown: Bool = false
+
     @State private var profileName: String = ""
     @State private var savedProfiles: [CalibrationProfile] = []
-    @State private var countdownTimer: Timer?
-    @State private var recordingTimer: Timer?
-    /// 防抖：避免捏合过快连续触发
-    @State private var lastPinchTriggerTime: TimeInterval = 0
-    private let pinchTriggerDebounce: TimeInterval = 1.0
 
-    private let allGestures = ThumbPinchGesture.allCases
+    private let recordDuration: TimeInterval = 2.0
+    private let preparationDuration: TimeInterval = 3.0
+    private let initialCountdownDuration: TimeInterval = 5.0
+    private let minSampleCount: Int = 15
+
+    /// Core gestures (minimum set for viable calibration)
+    static let coreGestures: Set<ThumbPinchGesture> = [
+        .indexTip, .middleTip, .ringTip, .littleTip
+    ]
+
+    var completedCount: Int {
+        gestureStatuses.values.filter(\.isCompleted).count
+    }
+
+    var allCompleted: Bool {
+        completedCount == 12
+    }
+    
+    var currentGesture: ThumbPinchGesture? {
+        guard currentGestureIndex < ThumbPinchGesture.allCases.count else { return nil }
+        return ThumbPinchGesture.allCases[currentGestureIndex]
+    }
 
     var body: some View {
         @Bindable var model = model
-        // TimelineView drives pinch detection polling for gesture-driven navigation
         TimelineView(.periodic(from: .now, by: 0.033)) { context in
-            let _ = context.date
-            let _ = { model.flushPinchDataToUI() }()
             VStack(spacing: 0) {
                 headerBar
                 Divider().overlay(CyberpunkTheme.neonCyan.opacity(0.3))
 
                 switch state {
-                case .idle:
-                    idleView
-                case .countdown(let gesture, let remaining):
-                    countdownView(gesture: gesture, remaining: remaining)
-                case .recording(let gesture):
-                    recordingView(gesture: gesture)
-                case .review:
-                    reviewView
+                case .welcome:
+                    welcomeView
+                case .recording:
+                    recordingView
                 case .complete:
                     completeView
                 case .profileList:
@@ -62,6 +98,12 @@ struct CalibrationView: View {
 
                 Spacer(minLength: 0)
             }
+            .onChange(of: context.date) { _, _ in
+                model.flushPinchDataToUI()
+                if state == .recording {
+                    checkRecordingProgress()
+                }
+            }
         }
         .frame(minWidth: 700, minHeight: 500)
         .background(CyberpunkTheme.darkBg.opacity(0.6))
@@ -69,53 +111,52 @@ struct CalibrationView: View {
             savedProfiles = CalibrationProfile.listAll()
         }
         .onDisappear {
-            stopAllTimers()
-            model.stopCalibrationRecording()
+            if state == .recording {
+                model.stopCalibrationRecording()
+            }
         }
     }
-
-    // MARK: - Pinch Detection Helper
-
-    /// 检测是否有任何手做了捏合动作（用于推进校准流程）
-    private var anyHandPinched: Bool {
-        let allSummaries = model.leftPinchSummaries.merging(model.rightPinchSummaries) { l, r in
-            l.isPinched ? l : r
-        }
-        return allSummaries.values.contains { $0.isPinched }
-    }
-
-    /// 检测是否有捏合并进行防抖处理
-    private func checkPinchTrigger() -> Bool {
-        guard anyHandPinched else { return false }
-        let now = CACurrentMediaTime()
-        guard now - lastPinchTriggerTime > pinchTriggerDebounce else { return false }
-        lastPinchTriggerTime = now
-        return true
-    }
-
-    // MARK: - Header
 
     private var headerBar: some View {
         HStack {
-            Text("// CALIBRATION SYSTEM")
+            Text("// 快速校准")
                 .font(.system(size: 16, weight: .bold, design: .monospaced))
                 .foregroundColor(CyberpunkTheme.neonCyan)
 
+            if state == .recording {
+                Text("\(completedCount)/12")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 2)
+                    .background(
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(CyberpunkTheme.neonGreen.opacity(0.1))
+                    )
+            }
+
             Spacer()
 
-            if state != .idle && state != .profileList && state != .complete {
+            if state == .recording {
                 Button("中止") {
-                    stopAllTimers()
                     model.stopCalibrationRecording()
-                    state = .idle
-                    collectedSamples = [:]
-                    collectedSnapshots = [:]
-                    currentGestureIndex = 0
+                    state = .welcome
+                    resetCalibration()
                 }
                 .buttonStyle(CyberpunkButtonStyle(color: .red))
+
+                if allCompleted {
+                    Button("完成 >>") {
+                        finishCalibration()
+                    }
+                    .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonGreen))
+                }
             }
 
             Button("配置列表") {
+                if state == .recording {
+                    model.stopCalibrationRecording()
+                }
                 state = .profileList
                 savedProfiles = CalibrationProfile.listAll()
             }
@@ -130,9 +171,9 @@ struct CalibrationView: View {
         .padding(.vertical, 10)
     }
 
-    // MARK: - Idle
+    // MARK: - Welcome View
 
-    private var idleView: some View {
+    private var welcomeView: some View {
         VStack(spacing: 20) {
             Spacer()
 
@@ -141,19 +182,20 @@ struct CalibrationView: View {
                 .foregroundColor(CyberpunkTheme.neonCyan.opacity(0.6))
                 .neonGlow(color: CyberpunkTheme.neonCyan, radius: 10)
 
-            Text("个人校准训练")
+            Text("规则校准 - 收集参考数据")
                 .font(.system(size: 24, weight: .bold, design: .monospaced))
                 .foregroundColor(CyberpunkTheme.neonCyan)
 
-            Text("依次完成12个拇指捏合手势的采样\n系统将根据你的手部特征生成个性化阈值")
+            Text("为每个手势收集距离和姿态参考数据\n运行时将结合ML模型进行融合检测")
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
 
             VStack(alignment: .leading, spacing: 6) {
-                infoRow("1", "每个手势有3秒准备 + 3秒录制")
-                infoRow("2", "录制期间请保持拇指捏合目标关节")
-                infoRow("3", "全程看着屏幕，用捏合手势推进")
+                infoRow("1", "点击手势格子开始录制")
+                infoRow("2", "做对应手势并保持2秒")
+                infoRow("3", "系统收集距离和姿态数据")
+                infoRow("4", "完成全部12个手势")
             }
             .padding()
             .background(
@@ -170,19 +212,27 @@ struct CalibrationView: View {
                         .font(.system(size: 12, design: .monospaced))
                         .foregroundColor(CyberpunkTheme.neonYellow)
                 }
+            } else if !model.mlTrainer.isModelLoaded {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundColor(CyberpunkTheme.neonYellow)
+                    Text("ML 模型未加载，请确保 HandGesture.mlmodelc 已内置")
+                        .font(.system(size: 12, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.neonYellow)
+                }
             } else {
-                // Pinch-to-start prompt with pulse animation
-                Text("捏合任意手势开始校准 ▶")
-                    .font(.system(size: 16, weight: .bold, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
-                    .neonGlow(color: CyberpunkTheme.neonGreen, radius: 6)
-
-                // Detect pinch to start
-                let _ = {
-                    if checkPinchTrigger() {
-                        startCalibration()
-                    }
-                }()
+                Button(action: {
+                    showInitialCountdown = true
+                    initialCountdownStartTime = CACurrentMediaTime()
+                    currentGestureIndex = 0
+                    state = .recording
+                }) {
+                    Text("开始校准 >>")
+                        .font(.system(size: 16, weight: .bold, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.neonGreen)
+                        .neonGlow(color: CyberpunkTheme.neonGreen, radius: 6)
+                }
+                .buttonStyle(.plain)
             }
 
             Spacer()
@@ -202,166 +252,324 @@ struct CalibrationView: View {
         }
     }
 
-    // MARK: - Countdown
+    // MARK: - Recording View
 
-    private func countdownView(gesture: ThumbPinchGesture, remaining: Int) -> some View {
-        VStack(spacing: 16) {
-            progressHeader
+    private var recordingView: some View {
+        VStack(spacing: 30) {
+            Text("手势校准 \(completedCount)/12")
+                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                .foregroundColor(CyberpunkTheme.neonCyan)
 
-            Spacer()
-
-            HandIllustrationView(
-                fingerGroup: gesture.fingerGroup,
-                results: buildCalibrationResults(for: gesture, pinchValue: 0.3)
-            )
-            .frame(width: 160, height: 210)
-            .neonGlow(color: CyberpunkTheme.fingerColor(for: gesture.fingerGroup), radius: 8)
-
-            Text(gesture.displayName)
-                .font(.system(size: 22, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.fingerColor(for: gesture.fingerGroup))
-
-            Text("准备捏合...")
-                .font(.system(size: 14, design: .monospaced))
-                .foregroundColor(.gray)
-
-            Text("\(remaining)")
-                .font(.system(size: 72, weight: .heavy, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonYellow)
-                .neonGlow(color: CyberpunkTheme.neonYellow, radius: 12)
-
-            Spacer()
-        }
-        .padding()
-    }
-
-    // MARK: - Recording
-
-    private func recordingView(gesture: ThumbPinchGesture) -> some View {
-        VStack(spacing: 16) {
-            progressHeader
-
-            Spacer()
-
-            HStack(spacing: 20) {
-                HandIllustrationView(
-                    fingerGroup: gesture.fingerGroup,
-                    results: buildCalibrationResults(for: gesture, pinchValue: currentPinchValue(for: gesture))
-                )
-                .frame(width: 120, height: 160)
-
-                VStack(alignment: .leading, spacing: 8) {
+            if let gesture = currentGesture {
+                VStack(spacing: 20) {
+                    Text("请做以下手势：")
+                        .font(.system(size: 16, design: .monospaced))
+                        .foregroundColor(.gray)
+                    
                     Text(gesture.displayName)
-                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .font(.system(size: 32, weight: .bold, design: .monospaced))
                         .foregroundColor(CyberpunkTheme.fingerColor(for: gesture.fingerGroup))
+                        .neonGlow(color: CyberpunkTheme.fingerColor(for: gesture.fingerGroup), radius: 8)
 
-                    Text("● 正在录制")
-                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+            if showInitialCountdown {
+                let elapsed = CACurrentMediaTime() - initialCountdownStartTime
+                let remaining = max(0, initialCountdownDuration - elapsed)
+                let countdown = Int(ceil(remaining))
+                
+                VStack(spacing: 12) {
+                    Text("准备开始校准")
+                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.neonCyan)
+                    
+                    Text("\(countdown)")
+                        .font(.system(size: 60, weight: .bold, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.neonCyan)
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(CyberpunkTheme.neonCyan.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(CyberpunkTheme.neonCyan.opacity(0.4), lineWidth: 2)
+                        )
+                )
+            } else if isInPreparation {
+                let elapsed = CACurrentMediaTime() - preparationStartTime
+                let remaining = max(0, preparationDuration - elapsed)
+                let countdown = Int(ceil(remaining))
+                
+                VStack(spacing: 12) {
+                    Text("准备...")
+                        .font(.system(size: 18, weight: .bold, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.neonYellow)
+                    
+                    Text("\(countdown)")
+                        .font(.system(size: 48, weight: .bold, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.neonYellow)
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(CyberpunkTheme.neonYellow.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(CyberpunkTheme.neonYellow.opacity(0.4), lineWidth: 2)
+                        )
+                )
+            } else if let gesture = currentGesture, case .recording(let startTime) = gestureStatuses[gesture] {
+                let elapsed = CACurrentMediaTime() - startTime
+                let remaining = max(0, recordDuration - elapsed)
+                
+                VStack(spacing: 12) {
+                    Text("录制中...")
+                        .font(.system(size: 18, weight: .bold, design: .monospaced))
                         .foregroundColor(.red)
-
-                    let currentSamples = model.calibrationSamples
+                    
+                    Text(String(format: "%.1fs", remaining))
+                        .font(.system(size: 36, weight: .bold, design: .monospaced))
+                        .foregroundColor(.red)
+                    
                     CalibrationWaveView(
-                        samples: currentSamples,
+                        samples: model.calibrationSamples,
                         color: CyberpunkTheme.fingerColor(for: gesture.fingerGroup),
                         thresholdMin: gesture.pinchConfig.minDistance,
                         thresholdMax: gesture.pinchConfig.maxDistance
                     )
-                    .frame(width: 300, height: 100)
-
-                    HStack(spacing: 16) {
-                        Text("采样: \(currentSamples.count)")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundColor(.gray)
-                        if let last = currentSamples.last {
-                            Text(String(format: "距离: %.4f m", last))
-                                .font(.system(size: 11, design: .monospaced))
-                                .foregroundColor(CyberpunkTheme.neonCyan)
-                        }
-                    }
+                    .frame(height: 100)
+                }
+                .padding()
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.red.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.red.opacity(0.4), lineWidth: 2)
+                        )
+                )
+            } else if currentGesture != nil {
+                Text("等待检测手势...")
+                    .font(.system(size: 16, design: .monospaced))
+                    .foregroundColor(.gray)
+            }
                 }
             }
-
-            Spacer()
         }
         .padding()
     }
 
-    // MARK: - Review
+    // MARK: - Progress Wheel
 
-    private var reviewView: some View {
-        VStack(spacing: 12) {
-            Text("// 校准完成 — 数据概览")
-                .font(.system(size: 16, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonGreen)
-                .padding(.top, 12)
+    private var progressWheel: some View {
+        ZStack {
+            Canvas { context, size in
+                let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                let radius = min(size.width, size.height) / 2 - 12
+                let innerRadius = radius - 18
+                let segmentAngle = 2.0 * .pi / 12.0
+                let gap = 0.03
 
-            ScrollView {
-                LazyVGrid(columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ], spacing: 8) {
-                    ForEach(allGestures) { gesture in
-                        if let samples = collectedSamples[gesture.rawValue], !samples.isEmpty {
-                            let sample = CalibrationSample(gestureRawValue: gesture.rawValue, samples: samples)
-                            reviewCard(gesture: gesture, sample: sample)
-                        }
+                for gesture in ThumbPinchGesture.allCases {
+                    let index = gesture.rawValue
+                    let startAngle = Double(index) * segmentAngle - .pi / 2 + gap
+                    let endAngle = startAngle + segmentAngle - 2 * gap
+
+                    let color = CyberpunkTheme.fingerColor(for: gesture.fingerGroup)
+                    let status = gestureStatuses[gesture] ?? .pending
+
+                    // Build arc path (thick arc segment)
+                    var outerArc = Path()
+                    outerArc.addArc(center: center, radius: radius,
+                                    startAngle: .radians(startAngle),
+                                    endAngle: .radians(endAngle),
+                                    clockwise: false)
+                    outerArc.addArc(center: center, radius: innerRadius,
+                                    startAngle: .radians(endAngle),
+                                    endAngle: .radians(startAngle),
+                                    clockwise: true)
+                    outerArc.closeSubpath()
+
+                    switch status {
+                    case .pending:
+                        context.stroke(
+                            Path { p in
+                                p.addArc(center: center, radius: (radius + innerRadius) / 2,
+                                        startAngle: .radians(startAngle),
+                                        endAngle: .radians(endAngle),
+                                        clockwise: false)
+                            },
+                            with: .color(color.opacity(0.15)),
+                            lineWidth: radius - innerRadius
+                        )
+                    case .recording:
+                        context.fill(outerArc, with: .color(color.opacity(0.6)))
+                    case .completed:
+                        context.fill(outerArc, with: .color(color.opacity(0.85)))
+                    }
+
+                    // Core gesture indicator (small dot at outer edge)
+                    if Self.coreGestures.contains(gesture) {
+                        let midAngle = (startAngle + endAngle) / 2
+                        let dotRadius: CGFloat = status.isCompleted ? 3 : 2
+                        let dotCenter = CGPoint(
+                            x: center.x + (radius + 6) * cos(midAngle),
+                            y: center.y + (radius + 6) * sin(midAngle)
+                        )
+                        let dotRect = CGRect(
+                            x: dotCenter.x - dotRadius,
+                            y: dotCenter.y - dotRadius,
+                            width: dotRadius * 2,
+                            height: dotRadius * 2
+                        )
+                        context.fill(
+                            Path(ellipseIn: dotRect),
+                            with: .color(status.isCompleted ? CyberpunkTheme.neonGreen : color.opacity(0.4))
+                        )
                     }
                 }
-                .padding(.horizontal)
             }
 
-            Divider().overlay(CyberpunkTheme.neonCyan.opacity(0.2))
-
-            HStack(spacing: 12) {
-                Text("配置已自动保存为「\(profileName)」")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
-
-                Spacer()
-
-                Button("返回") {
-                    state = .idle
-                    collectedSamples = [:]
-                    collectedSnapshots = [:]
-                    currentGestureIndex = 0
-                    profileName = ""
-                }
-                .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonCyan))
+            // Center text
+            VStack(spacing: 2) {
+                Text("\(completedCount)")
+                    .font(.system(size: 36, weight: .heavy, design: .monospaced))
+                    .foregroundColor(allCompleted ? CyberpunkTheme.neonGreen : CyberpunkTheme.neonCyan)
+                Text("/ 12")
+                    .font(.system(size: 14, design: .monospaced))
+                    .foregroundColor(.gray)
             }
-            .padding()
         }
     }
 
-    private func reviewCard(gesture: ThumbPinchGesture, sample: CalibrationSample) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Circle()
-                    .fill(CyberpunkTheme.fingerColor(for: gesture.fingerGroup))
-                    .frame(width: 6, height: 6)
-                Text(gesture.displayName)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.fingerColor(for: gesture.fingerGroup))
+    // MARK: - Real-time Feedback Panel
+
+
+    private var gestureGrid: some View {
+        VStack(spacing: 2) {
+            // Column headers
+            HStack(spacing: 4) {
+                Text("")
+                    .frame(width: 40)
+                ForEach(ThumbPinchGesture.FingerGroup.allCases, id: \.rawValue) { group in
+                    Text(group.rawValue)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(CyberpunkTheme.fingerColor(for: group))
+                        .frame(maxWidth: .infinity)
+                }
             }
 
-            CalibrationWaveView(
-                samples: sample.samples,
-                color: CyberpunkTheme.fingerColor(for: gesture.fingerGroup),
-                thresholdMin: gesture.pinchConfig.minDistance,
-                thresholdMax: gesture.pinchConfig.maxDistance
-            )
-            .frame(height: 50)
+            // Rows: tip, intermediate, knuckle
+            ForEach([
+                ("指尖", ThumbPinchGesture.JointLevel.tip, true),
+                ("中节", ThumbPinchGesture.JointLevel.intermediate, false),
+                ("近端", ThumbPinchGesture.JointLevel.knuckle, false)
+            ], id: \.0) { label, level, isCore in
+                HStack(spacing: 4) {
+                    HStack(spacing: 2) {
+                        if isCore {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 6))
+                                .foregroundColor(CyberpunkTheme.neonYellow)
+                        }
+                        Text(label)
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundColor(.gray)
+                    }
+                    .frame(width: 40)
 
-            CalibrationStatsView(sample: sample)
+                    ForEach(ThumbPinchGesture.FingerGroup.allCases, id: \.rawValue) { group in
+                        let gesture = gestureFor(group: group, level: level)
+                        gestureCell(gesture: gesture)
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
         }
         .padding(8)
         .background(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(CyberpunkTheme.fingerColor(for: gesture.fingerGroup).opacity(0.2), lineWidth: 0.5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.02)))
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(0.02))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
+                )
         )
     }
 
-    // MARK: - Complete
+    private func gestureFor(group: ThumbPinchGesture.FingerGroup, level: ThumbPinchGesture.JointLevel) -> ThumbPinchGesture {
+        ThumbPinchGesture.allCases.first { $0.fingerGroup == group && $0.jointLevel == level }!
+    }
+
+    private func gestureCell(gesture: ThumbPinchGesture) -> some View {
+        let status = gestureStatuses[gesture] ?? .pending
+        let color = CyberpunkTheme.fingerColor(for: gesture.fingerGroup)
+
+        return Button {
+            if currentGesture == nil && !status.isCompleted {
+                startRecording(gesture: gesture)
+            } else if status.isCompleted {
+                gestureStatuses[gesture] = .pending
+                collectedSamples.removeValue(forKey: gesture.rawValue)
+                collectedSnapshots.removeValue(forKey: gesture.rawValue)
+            }
+        } label: {
+            HStack(spacing: 4) {
+                statusIcon(for: status, color: color)
+                    .frame(width: 14, height: 14)
+
+                if case .completed(let count) = status {
+                    Text("\(count)")
+                        .font(.system(size: 9, design: .monospaced))
+                        .foregroundColor(color.opacity(0.6))
+                }
+            }
+            .padding(.vertical, 6)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(cellBackground(for: status, color: color))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(cellBorder(for: status, color: color), lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func statusIcon(for status: GestureCalibrationStatus, color: Color) -> some View {
+        switch status {
+        case .pending:
+            Circle()
+                .stroke(color.opacity(0.2), lineWidth: 1)
+        case .recording:
+            Circle()
+                .fill(Color.red)
+        case .completed:
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 12))
+                .foregroundColor(CyberpunkTheme.neonGreen)
+        }
+    }
+
+    private func cellBackground(for status: GestureCalibrationStatus, color: Color) -> Color {
+        switch status {
+        case .pending: return Color.white.opacity(0.01)
+        case .recording: return Color.red.opacity(0.08)
+        case .completed: return CyberpunkTheme.neonGreen.opacity(0.05)
+        }
+    }
+
+    private func cellBorder(for status: GestureCalibrationStatus, color: Color) -> Color {
+        switch status {
+        case .pending: return color.opacity(0.1)
+        case .recording: return Color.red.opacity(0.5)
+        case .completed: return CyberpunkTheme.neonGreen.opacity(0.3)
+        }
+    }
+
+    // MARK: - Complete View
 
     private var completeView: some View {
         VStack(spacing: 20) {
@@ -372,7 +580,7 @@ struct CalibrationView: View {
                 .foregroundColor(CyberpunkTheme.neonGreen)
                 .neonGlow(color: CyberpunkTheme.neonGreen, radius: 10)
 
-            Text("校准配置已保存")
+            Text("校准完成")
                 .font(.system(size: 22, weight: .bold, design: .monospaced))
                 .foregroundColor(CyberpunkTheme.neonGreen)
 
@@ -380,27 +588,42 @@ struct CalibrationView: View {
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.gray)
 
-            // ML 训练状态显示
+            // Summary
+            HStack(spacing: 20) {
+                summaryItem(title: "已校准", value: "\(completedCount)/12", color: CyberpunkTheme.neonGreen)
+                summaryItem(title: "全部手势", value: allCompleted ? "全部完成" : "部分", color: allCompleted ? CyberpunkTheme.neonGreen : CyberpunkTheme.neonYellow)
+            }
+
+            // ML training status
             mlTrainingStatusView
 
-            Text("捏合任意手势返回 ▶")
+            Text("捏合任意手势返回 >>")
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
                 .foregroundColor(CyberpunkTheme.accentAmber)
                 .neonGlow(color: CyberpunkTheme.accentAmber, radius: 4)
 
-            // Detect pinch to go back
-            let _ = {
-                if checkPinchTrigger() {
-                    state = .idle
-                    collectedSamples = [:]
-                    collectedSnapshots = [:]
-                    currentGestureIndex = 0
-                    profileName = ""
-                }
-            }()
-
             Spacer()
         }
+    }
+
+    private func summaryItem(title: String, value: String, color: Color) -> some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+            Text(title)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(.gray)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(Color.white.opacity(0.02))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(color.opacity(0.2), lineWidth: 0.5)
+                )
+        )
     }
 
     // MARK: - ML Training Status
@@ -439,6 +662,12 @@ struct CalibrationView: View {
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(.red)
                     .lineLimit(2)
+            case .skippedRuleBased:
+                Image(systemName: "checkmark.seal.fill")
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+                Text("使用规则检测（距离+消歧+余弦相似度）")
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
             }
         }
         .padding(.horizontal, 16)
@@ -458,7 +687,7 @@ struct CalibrationView: View {
         case .idle: return .gray
         case .preparing: return CyberpunkTheme.neonYellow
         case .training: return CyberpunkTheme.neonCyan
-        case .completed: return CyberpunkTheme.neonGreen
+        case .completed, .skippedRuleBased: return CyberpunkTheme.neonGreen
         case .failed: return .red
         }
     }
@@ -476,7 +705,6 @@ struct CalibrationView: View {
 
             ScrollView {
                 VStack(spacing: 6) {
-                    // 默认配置
                     defaultProfileRow(isActive: activeId == nil)
 
                     ForEach(savedProfiles) { profile in
@@ -488,7 +716,7 @@ struct CalibrationView: View {
 
             HStack {
                 Button("返回") {
-                    state = .idle
+                    state = .welcome
                 }
                 .buttonStyle(CyberpunkButtonStyle(color: .gray))
             }
@@ -583,116 +811,48 @@ struct CalibrationView: View {
         )
     }
 
-    // MARK: - Progress Header
 
-    private var progressHeader: some View {
-        VStack(spacing: 4) {
-            HStack {
-                Text("手势 \(currentGestureIndex + 1) / \(allGestures.count)")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonCyan)
-                Spacer()
+    // MARK: - Profile Saving
+
+    private func finishCalibration() {
+        // Stop any active recording
+        if let gesture = currentGesture {
+            let result = model.stopCalibrationRecording()
+            if result.samples.count >= minSampleCount {
+                collectedSamples[gesture.rawValue] = result.samples
+                collectedSnapshots[gesture.rawValue] = result.snapshots
+                gestureStatuses[gesture] = .completed(sampleCount: result.samples.count)
             }
-            NeonProgressBar(
-                value: Float(currentGestureIndex) / Float(allGestures.count),
-                color: CyberpunkTheme.neonCyan
-            )
+            // 不需要设置为nil，由索引控制
         }
-        .padding(.horizontal)
-        .padding(.top, 8)
-    }
 
-    // MARK: - Logic
-
-    private func currentPinchValue(for gesture: ThumbPinchGesture) -> Float {
-        let leftVal = model.leftPinchResults[gesture]?.pinchValue ?? 0
-        let rightVal = model.rightPinchResults[gesture]?.pinchValue ?? 0
-        return max(leftVal, rightVal)
-    }
-
-    /// 为HandIllustrationView构建模拟的results字典
-    private func buildCalibrationResults(for gesture: ThumbPinchGesture, pinchValue: Float) -> [ThumbPinchGesture: PinchResult] {
-        var results: [ThumbPinchGesture: PinchResult] = [:]
-        // 为当前手势所属finger group的所有关节生成结果
-        for g in ThumbPinchGesture.allCases where g.fingerGroup == gesture.fingerGroup {
-            let value: Float = (g == gesture) ? pinchValue : 0.1
-            results[g] = PinchResult(gesture: g, pinchValue: value, rawDistance: 0.05)
-        }
-        return results
-    }
-
-    private func startCalibration() {
-        collectedSamples = [:]
-        collectedSnapshots = [:]
-        currentGestureIndex = 0
-        profileName = ""
-        startCountdown(for: allGestures[0])
-    }
-
-    private func startCountdown(for gesture: ThumbPinchGesture) {
-        state = .countdown(gesture: gesture, remaining: 3)
-        var count = 3
-        countdownTimer?.invalidate()
-        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { timer in
-            count -= 1
-            if count <= 0 {
-                timer.invalidate()
-                startRecording(for: gesture)
-            } else {
-                state = .countdown(gesture: gesture, remaining: count)
-            }
-        }
-    }
-
-    private func startRecording(for gesture: ThumbPinchGesture) {
-        state = .recording(gesture: gesture)
-        model.startCalibrationRecording(gesture: gesture)
-
-        recordingTimer?.invalidate()
-        recordingTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            finishRecording(for: gesture)
-        }
-    }
-
-    private func finishRecording(for gesture: ThumbPinchGesture) {
-        let result = model.stopCalibrationRecording()
-        collectedSamples[gesture.rawValue] = result.samples
-        collectedSnapshots[gesture.rawValue] = result.snapshots
-
-        currentGestureIndex += 1
-
-        if currentGestureIndex < allGestures.count {
-            startCountdown(for: allGestures[currentGestureIndex])
-        } else {
-            // 自动保存并激活
-            autoSaveProfile()
-        }
-    }
-
-    private func autoSaveProfile() {
-        let autoName = CalibrationProfile.nextAutoName()
-        profileName = autoName
-        let samples = collectedSamples.map { (rawValue, floats) in
-            CalibrationSample(
+        // Build samples (only completed gestures)
+        let samples = collectedSamples.compactMap { (rawValue, floats) -> CalibrationSample? in
+            guard !floats.isEmpty else { return nil }
+            return CalibrationSample(
                 gestureRawValue: rawValue,
                 samples: floats,
                 handSnapshots: collectedSnapshots[rawValue] ?? []
             )
         }
+
+        guard !samples.isEmpty else { return }
+
+        // Save profile
+        let autoName = CalibrationProfile.nextAutoName()
+        profileName = autoName
         var profile = CalibrationProfile(name: autoName, samples: samples)
         try? profile.save()
         CalibrationProfile.saveActiveProfileId(profile.id)
         model.activeProfile = profile
         model.referenceHandInfos = profile.allReferenceHandInfos()
 
-        // 触发 ML 模型训练
-        model.mlTrainingState = .preparing
+        // Trigger ML training (on visionOS returns .skippedRuleBased immediately)
         Task {
             let modelURL = await model.mlTrainer.train(profile: profile)
             await MainActor.run {
                 model.mlTrainingState = model.mlTrainer.state
                 if let url = modelURL {
-                    // 保存模型路径到配置
                     profile.mlModelFileName = url.lastPathComponent
                     try? profile.save()
                     model.activeProfile = profile
@@ -703,10 +863,76 @@ struct CalibrationView: View {
         state = .complete
     }
 
-    private func stopAllTimers() {
-        countdownTimer?.invalidate()
-        countdownTimer = nil
-        recordingTimer?.invalidate()
-        recordingTimer = nil
+    private func resetCalibration() {
+        collectedSamples = [:]
+        collectedSnapshots = [:]
+        currentGestureIndex = 0
+        profileName = ""
+        for g in ThumbPinchGesture.allCases {
+            gestureStatuses[g] = .pending
+        }
+    }
+    
+    private func startRecording(gesture: ThumbPinchGesture) {
+        let now = CACurrentMediaTime()
+        gestureStatuses[gesture] = .recording(startTime: now)
+        model.startCalibrationRecording(gesture: gesture)
+    }
+    
+    private func checkRecordingProgress() {
+        // 检查初始倒计时
+        if showInitialCountdown {
+            let elapsed = CACurrentMediaTime() - initialCountdownStartTime
+            if elapsed >= initialCountdownDuration {
+                showInitialCountdown = false
+                // 开始第一个手势的准备倒计时
+                isInPreparation = true
+                preparationStartTime = CACurrentMediaTime()
+            }
+            return
+        }
+        
+        // 检查准备阶段
+        if isInPreparation {
+            let elapsed = CACurrentMediaTime() - preparationStartTime
+            if elapsed >= preparationDuration {
+                isInPreparation = false
+                if let gesture = currentGesture {
+                    startRecording(gesture: gesture)
+                }
+            }
+            return
+        }
+        
+        guard let gesture = currentGesture,
+              case .recording(let startTime) = gestureStatuses[gesture] else {
+            return
+        }
+        
+        let elapsed = CACurrentMediaTime() - startTime
+        if elapsed >= recordDuration {
+            let (samples, snapshots) = model.stopCalibrationRecording()
+            
+            let isValid = samples.count >= minSampleCount
+            
+            if isValid {
+                collectedSamples[gesture.rawValue] = samples
+                collectedSnapshots[gesture.rawValue] = snapshots
+                gestureStatuses[gesture] = .completed(sampleCount: samples.count)
+                
+                // 自动进入下一个手势
+                currentGestureIndex += 1
+                if currentGestureIndex >= ThumbPinchGesture.allCases.count {
+                    // 全部完成
+                    finishCalibration()
+                } else {
+                    // 开始下一个手势的准备倒计时
+                    isInPreparation = true
+                    preparationStartTime = CACurrentMediaTime()
+                }
+            } else {
+                gestureStatuses[gesture] = .pending
+            }
+        }
     }
 }

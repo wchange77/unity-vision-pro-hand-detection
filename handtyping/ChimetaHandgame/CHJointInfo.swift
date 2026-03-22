@@ -41,6 +41,14 @@ public struct CHJointInfo: Sendable, Equatable {
     public var positionToParent: SIMD3<Float> {
         return transformToParent.columns.3.xyz
     }
+    
+    public var rotation: simd_quatf {
+        return simd_quatf(transform)
+    }
+    
+    public var rotationToParent: simd_quatf {
+        return simd_quatf(transformToParent)
+    }
 
     public var description: String {
         return "name: \(name), isTracked: \(isTracked), position: \(transform.columns.0.xyz)"

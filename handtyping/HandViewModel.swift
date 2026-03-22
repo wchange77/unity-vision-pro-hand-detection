@@ -15,12 +15,10 @@ let timerPinchDetect = PerfTimer("detectAllPinch")
 struct PinchSummary: Equatable {
     /// Pinch value quantized to 5% steps (0-20 representing 0%-100%)
     let quantizedValue: Int
-    /// Whether this gesture is considered pinched
-    let isPinched: Bool
     /// Raw distance for calibration display
     let rawDistance: Float
 
-    static let zero = PinchSummary(quantizedValue: 0, isPinched: false, rawDistance: 0)
+    static let zero = PinchSummary(quantizedValue: 0, rawDistance: 0)
 }
 
 @Observable
@@ -47,6 +45,10 @@ class HandViewModel: @unchecked Sendable {
     // UI-facing pinch results: full resolution for calibration, quantized for display
     var leftPinchResults: [ThumbPinchGesture: PinchResult] = [:]
     var rightPinchResults: [ThumbPinchGesture: PinchResult] = [:]
+    
+    // 当前检测到的手势（融合后的最终结果）
+    var leftDetectedGesture: GestureClassification = .none
+    var rightDetectedGesture: GestureClassification = .none
 
     // Quantized summaries for efficient SwiftUI updates
     var leftPinchSummaries: [ThumbPinchGesture: PinchSummary] = [:]
@@ -102,6 +104,20 @@ class HandViewModel: @unchecked Sendable {
     // MARK: - ML Training
     var mlTrainer = GestureMLTrainer()
     var mlTrainingState: GestureMLTrainer.TrainingState = .idle
+    
+    // MARK: - Gesture Classifier
+    private let gestureClassifier = GestureClassifier()
+
+    /// Cached ML classification results (updated at ~4Hz, not every frame)
+    @ObservationIgnored
+    var cachedMLConfidences: [ThumbPinchGesture: Float] = [:]
+    @ObservationIgnored
+    private var lastMLInferenceTime: TimeInterval = 0
+    /// ML inference interval (~4Hz)
+    private let mlInferenceInterval: TimeInterval = 0.011
+
+    /// Latest ML top prediction for calibration UI real-time feedback
+    var latestMLPrediction: (gesture: ThumbPinchGesture, confidence: Float)?
 
     /// 是否需要校准（没有任何已保存的配置）
     var needsCalibration: Bool {
@@ -142,16 +158,19 @@ class HandViewModel: @unchecked Sendable {
 
     /// 检查并发布导航事件（由UI线程的flushPinchDataToUI调用）
     func checkGestureNavigation() {
+        // 游戏进行时不发布导航事件，防止重复打开窗口
+        guard !isGamePlaying else { return }
         let now = CACurrentMediaTime()
         guard now - lastNavTime > navDebounceInterval else { return }
 
-        // 检查左手和右手的pinch状态
-        let allSummaries = leftPinchSummaries.merging(rightPinchSummaries) { l, r in
-            l.isPinched ? l : r
-        }
+        // 检查左手和右手的检测结果
+        let detectedGestures: [ThumbPinchGesture] = [
+            leftDetectedGesture.gesture,
+            rightDetectedGesture.gesture
+        ].compactMap { $0 }
 
-        for (gesture, event) in Self.navGestureMap {
-            if let summary = allSummaries[gesture], summary.isPinched {
+        for gesture in detectedGestures {
+            if let event = Self.navGestureMap[gesture] {
                 // 避免连续触发同一手势
                 if gesture != lastNavGesture || now - lastNavTime > navDebounceInterval {
                     latestNavEvent = event
@@ -163,10 +182,7 @@ class HandViewModel: @unchecked Sendable {
         }
 
         // 如果没有手势被按下，重置lastNavGesture以允许再次触发
-        let anyNavPinched = Self.navGestureMap.keys.contains { gesture in
-            allSummaries[gesture]?.isPinched == true
-        }
-        if !anyNavPinched {
+        if detectedGestures.isEmpty {
             lastNavGesture = nil
         }
     }
@@ -184,6 +200,36 @@ class HandViewModel: @unchecked Sendable {
         } else {
             referenceHandInfos = [:]
         }
+        // Attempt to load ML model
+        loadMLModel()
+    }
+
+    /// Try loading the ML model from various sources
+    func loadMLModel() {
+        print("[ML] Attempting to load ML model...")
+        // 1. Try profile-associated model
+        if let profile = activeProfile,
+           let modelFile = profile.mlModelFileName {
+            print("[ML] Trying profile model: \(modelFile)")
+            if mlTrainer.loadModelFromDocuments(fileName: modelFile) {
+                print("[ML] ✓ Loaded profile model")
+                return
+            }
+        }
+        // 2. Try bundled model
+        print("[ML] Trying bundled model: HandGesture")
+        if mlTrainer.loadBundledModel(named: "HandGesture") {
+            print("[ML] ✓ Loaded bundled model")
+            return
+        }
+        // 3. Try default location in Documents
+        print("[ML] Trying Documents: HandGesture.mlmodelc")
+        if mlTrainer.loadModelFromDocuments(fileName: "HandGesture.mlmodelc") {
+            print("[ML] ✓ Loaded Documents model")
+            return
+        }
+        print("[ML] ✗ No ML model found - using rule-based detection only")
+        // No model available — pure rule-based detection continues
     }
 
     func clear() {
@@ -212,9 +258,42 @@ class HandViewModel: @unchecked Sendable {
         let rightHand = latestHandTracking.rightHandInfo
         let refs = referenceHandInfos
         let hasRef = !refs.isEmpty
+        let hasML = mlTrainer.isModelLoaded
+
+        // Run ML inference at ~4Hz (not every frame)
+        if hasML, t0 - lastMLInferenceTime > mlInferenceInterval {
+            lastMLInferenceTime = t0
+            let handForML = rightHand ?? leftHand
+            if let handForML {
+                Task.detached { [weak self, mlTrainer] in
+                    guard let results = mlTrainer.classify(handInfo: handForML) else { return }
+                    var newConf: [ThumbPinchGesture: Float] = [:]
+                    for r in results {
+                        if let g = ThumbPinchGesture.from(mlLabel: r.label) {
+                            newConf[g] = r.confidence
+                        }
+                    }
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.cachedMLConfidences = newConf
+                        // 标记需要刷新UI
+                        if let left = self.latestHandTracking.leftHandInfo {
+                            let results = self.detectPinch(for: left, refs: self.referenceHandInfos, hasRef: !self.referenceHandInfos.isEmpty, hasML: true, mlConfidences: newConf)
+                            self.leftPinchResults = results
+                        }
+                        if let right = self.latestHandTracking.rightHandInfo {
+                            let results = self.detectPinch(for: right, refs: self.referenceHandInfos, hasRef: !self.referenceHandInfos.isEmpty, hasML: true, mlConfidences: newConf)
+                            self.rightPinchResults = results
+                        }
+                    }
+                }
+            }
+        }
+
+        let mlConf = cachedMLConfidences
 
         if let leftHand {
-            let newResults = detectPinch(for: leftHand, refs: refs, hasRef: hasRef)
+            let newResults = detectPinch(for: leftHand, refs: refs, hasRef: hasRef, hasML: hasML, mlConfidences: mlConf)
             let newSummaries = quantizeSummaries(newResults)
             if newSummaries != pendingLeftSummaries {
                 pendingLeftSummaries = newSummaries
@@ -223,7 +302,7 @@ class HandViewModel: @unchecked Sendable {
             }
         }
         if let rightHand {
-            let newResults = detectPinch(for: rightHand, refs: refs, hasRef: hasRef)
+            let newResults = detectPinch(for: rightHand, refs: refs, hasRef: hasRef, hasML: hasML, mlConfidences: mlConf)
             let newSummaries = quantizeSummaries(newResults)
             if newSummaries != pendingRightSummaries {
                 pendingRightSummaries = newSummaries
@@ -262,8 +341,30 @@ class HandViewModel: @unchecked Sendable {
             rightPinchSummaries = pendingRightSummaries
             leftPinchResults = pendingLeftResults
             rightPinchResults = pendingRightResults
+            
+            // 使用分类器进行融合检测
+            let hasCalibration = !referenceHandInfos.isEmpty
+            let hasML = mlTrainer.isModelLoaded
+            leftDetectedGesture = gestureClassifier.classify(
+                results: leftPinchResults,
+                hasCalibration: hasCalibration,
+                hasML: hasML
+            )
+            rightDetectedGesture = gestureClassifier.classify(
+                results: rightPinchResults,
+                hasCalibration: hasCalibration,
+                hasML: hasML
+            )
+            
             // Check for gesture navigation events
             checkGestureNavigation()
+        }
+        // Update latest ML prediction for calibration UI
+        if let topEntry = cachedMLConfidences.max(by: { $0.value < $1.value }),
+           topEntry.value > 0.3 {
+            latestMLPrediction = (gesture: topEntry.key, confidence: topEntry.value)
+        } else {
+            latestMLPrediction = nil
         }
         // Flush calibration data (samples only — snapshots are deferred)
         if pendingCalibrationDirty {
@@ -273,25 +374,28 @@ class HandViewModel: @unchecked Sendable {
         }
     }
 
-    /// Quantize pinch results to 5% steps to minimize SwiftUI redraws
-    private func quantizeSummaries(_ results: [ThumbPinchGesture: PinchResult]) -> [ThumbPinchGesture: PinchSummary] {
+    /// Quantize pinch results to 5% steps to minimize SwiftUI redraws.
+    /// internal (not private) for @testable import unit testing.
+    func quantizeSummaries(_ results: [ThumbPinchGesture: PinchResult]) -> [ThumbPinchGesture: PinchSummary] {
         var summaries: [ThumbPinchGesture: PinchSummary] = [:]
         for (gesture, result) in results {
             summaries[gesture] = PinchSummary(
                 quantizedValue: Int(result.pinchValue * 20),  // 5% steps
-                isPinched: result.isPinched,
                 rawDistance: result.rawDistance
             )
         }
         return summaries
     }
 
-    /// Distance detection + neighbor disambiguation + cosine similarity (all lightweight vector math).
+    /// Distance detection + neighbor disambiguation + cosine similarity + ML confidence.
     /// NO serialization or heavy allocation in this path.
-    private func detectPinch(
+    /// internal (not private) for @testable import unit testing.
+    func detectPinch(
         for handInfo: CHHandInfo,
         refs: [ThumbPinchGesture: CHHandInfo],
-        hasRef: Bool
+        hasRef: Bool,
+        hasML: Bool = false,
+        mlConfidences: [ThumbPinchGesture: Float] = [:]
     ) -> [ThumbPinchGesture: PinchResult] {
         guard let thumbTip = handInfo.allJoints[.thumbTip] else { return [:] }
         let thumbPos = thumbTip.position
@@ -340,7 +444,7 @@ class HandViewModel: @unchecked Sendable {
                 rawDistance: primaryDistance,
                 neighborDistances: neighborDistances,
                 cosineSimilarity: cosineSim,
-                hasReference: hasRef
+                mlConfidence: mlConfidences[gesture] ?? 0
             )
         }
 

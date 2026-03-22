@@ -44,6 +44,22 @@ struct handtypingApp: App {
         .windowResizability(.contentSize)
         .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
 
+        WindowGroup(id: "pureML") {
+            PureMLView()
+                .environment(model)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
+
+        #if DEBUG
+        WindowGroup(id: "debugMLCollection") {
+            DebugMLDataCollectionView()
+                .environment(model)
+        }
+        .windowResizability(.contentSize)
+        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
+        #endif
+
         ImmersiveSpace(id: "pinchDetection") {
             PinchDetectionImmersiveView()
                 .environment(model)

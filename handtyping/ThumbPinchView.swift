@@ -18,7 +18,6 @@ struct ThumbPinchView: View {
         // This decouples the RealityKit render thread from SwiftUI's main thread.
         TimelineView(.periodic(from: .now, by: 0.033)) { context in
             let _ = context.date // force view update each tick
-            let _ = { model.flushPinchDataToUI() }()
             VStack(spacing: 0) {
                 // Top toolbar
                 toolbar(model: model)
@@ -30,7 +29,8 @@ struct ThumbPinchView: View {
                     HandColumn(
                         title: "L",
                         summaries: model.leftPinchSummaries,
-                        isActive: model.turnOnImmersiveSpace
+                        isActive: model.turnOnImmersiveSpace,
+                        detectedGestures: [model.leftDetectedGesture.gesture].compactMap { $0 }
                     )
 
                     Divider()
@@ -40,7 +40,8 @@ struct ThumbPinchView: View {
                     HandColumn(
                         title: "R",
                         summaries: model.rightPinchSummaries,
-                        isActive: model.turnOnImmersiveSpace
+                        isActive: model.turnOnImmersiveSpace,
+                        detectedGestures: [model.rightDetectedGesture.gesture].compactMap { $0 }
                     )
 
                     Divider()
@@ -51,6 +52,9 @@ struct ThumbPinchView: View {
                     PerfPanelContainer()
                 }
                 .padding(16)
+            }
+            .onChange(of: context.date) { _, _ in
+                model.flushPinchDataToUI()
             }
         }
         .frame(minWidth: 900, minHeight: 440)
@@ -90,6 +94,26 @@ struct ThumbPinchView: View {
                     .font(.system(size: 13, weight: .medium))
             }
             .tint(CyberpunkTheme.accentGreen)
+
+            // Pure ML button — opens pure ML detection view
+            Button {
+                openWindow(id: "pureML")
+            } label: {
+                Label("纯ML", systemImage: "brain")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .tint(CyberpunkTheme.neonCyan)
+
+            #if DEBUG
+            // ML Data Collection — debug only
+            Button {
+                openWindow(id: "debugMLCollection")
+            } label: {
+                Label("ML Data", systemImage: "brain.head.profile")
+                    .font(.system(size: 13, weight: .medium))
+            }
+            .tint(CyberpunkTheme.accentPurple)
+            #endif
 
             Spacer()
 
@@ -134,6 +158,13 @@ struct ThumbPinchView: View {
                 Text("ML就绪")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundColor(CyberpunkTheme.neonGreen)
+            case .skippedRuleBased:
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.system(size: 10))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
+                Text("规则检测")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundColor(CyberpunkTheme.neonGreen)
             case .failed:
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 10))
@@ -152,6 +183,7 @@ struct HandColumn: View {
     let title: String
     let summaries: [ThumbPinchGesture: PinchSummary]
     let isActive: Bool
+    let detectedGestures: [ThumbPinchGesture]
 
     var body: some View {
         VStack(spacing: 4) {
@@ -163,7 +195,8 @@ struct HandColumn: View {
             ForEach(ThumbPinchGesture.FingerGroup.allCases, id: \.self) { group in
                 FingerGroupCard(
                     group: group,
-                    summaries: summaries
+                    summaries: summaries,
+                    detectedGestures: detectedGestures
                 )
             }
         }
@@ -175,9 +208,10 @@ struct HandColumn: View {
 struct FingerGroupCard: View {
     let group: ThumbPinchGesture.FingerGroup
     let summaries: [ThumbPinchGesture: PinchSummary]
+    let detectedGestures: [ThumbPinchGesture]
 
     private var anyPinched: Bool {
-        group.gestures.contains { summaries[$0]?.isPinched == true }
+        group.gestures.contains { detectedGestures.contains($0) }
     }
 
     private var groupColor: Color {
@@ -204,7 +238,8 @@ struct FingerGroupCard: View {
                     JointProgressRow(
                         label: gesture.shortLabel,
                         summary: summaries[gesture] ?? .zero,
-                        color: groupColor
+                        color: groupColor,
+                        isPinched: detectedGestures.contains(gesture)
                     )
                 }
             }
@@ -238,6 +273,7 @@ struct JointProgressRow: View {
     let label: String
     let summary: PinchSummary
     let color: Color
+    let isPinched: Bool
 
     private var displayValue: Float {
         Float(summary.quantizedValue) / 20.0
@@ -248,18 +284,18 @@ struct JointProgressRow: View {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .frame(width: 28, alignment: .leading)
-                .foregroundColor(summary.isPinched ? CyberpunkTheme.neonGreen : .secondary)
+                .foregroundColor(isPinched ? CyberpunkTheme.neonGreen : .secondary)
 
             NeonProgressBar(
                 value: displayValue,
-                color: summary.isPinched ? CyberpunkTheme.neonGreen : color
+                color: isPinched ? CyberpunkTheme.neonGreen : color
             )
             .frame(width: 100)
 
             Text(String(format: "%d%%", summary.quantizedValue * 5))
                 .font(.system(size: 10, design: .monospaced))
                 .frame(width: 34, alignment: .trailing)
-                .foregroundColor(summary.isPinched ? CyberpunkTheme.neonGreen : .secondary.opacity(0.7))
+                .foregroundColor(isPinched ? CyberpunkTheme.neonGreen : .secondary.opacity(0.7))
         }
     }
 }
@@ -331,7 +367,7 @@ struct FingerGroupRow: View {
     let results: [ThumbPinchGesture: PinchResult]
 
     private var anyPinched: Bool {
-        group.gestures.contains { results[$0]?.isPinched == true }
+        group.gestures.contains { (results[$0]?.pinchValue ?? 0) > 0.75 }
     }
 
     private var groupColor: Color {
@@ -348,10 +384,11 @@ struct FingerGroupRow: View {
 
             VStack(spacing: 3) {
                 ForEach(group.gestures) { gesture in
+                    let isPinched = (results[gesture]?.pinchValue ?? 0) > 0.75
                     PinchProgressRow(
                         label: gesture.shortLabel,
                         value: results[gesture]?.pinchValue ?? 0,
-                        isPinched: results[gesture]?.isPinched ?? false,
+                        isPinched: isPinched,
                         color: groupColor
                     )
                 }

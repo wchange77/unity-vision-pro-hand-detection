@@ -48,6 +48,11 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// 从ML标签转换为手势
+    static func from(mlLabel: String) -> ThumbPinchGesture? {
+        return allCases.first { $0.displayName == mlLabel }
+    }
+
     /// 简短标签
     var shortLabel: String {
         switch self {
@@ -127,8 +132,9 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
             // 目标：indexIntermediate → 相邻：indexTip（上方）, indexKnuckle（下方）, middleIntermediateTip（相邻手指同层级）
             return [.indexFingerTip, .indexFingerKnuckle, .middleFingerIntermediateTip]
         case .indexKnuckle:
-            // 目标：indexKnuckle → 相邻：indexIntermediateTip（上方）, middleKnuckle（相邻手指同层级）
-            return [.indexFingerIntermediateTip, .middleFingerKnuckle]
+            // 目标：indexKnuckle → 相邻：indexIntermediateTip（上方）, indexIntermediateBase（更近的中节）
+            // 不包含 middleKnuckle 以避免与中指指根混淆
+            return [.indexFingerIntermediateTip, .indexFingerIntermediateBase]
 
         // 中指
         case .middleTip:
@@ -138,8 +144,9 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
             // 目标：middleIntermediate → 相邻：middleTip（上方）, middleKnuckle（下方）, indexIntermediateTip + ringIntermediateTip
             return [.middleFingerTip, .middleFingerKnuckle, .indexFingerIntermediateTip, .ringFingerIntermediateTip]
         case .middleKnuckle:
-            // 目标：middleKnuckle → 相邻：middleIntermediateTip（上方）, indexKnuckle + ringKnuckle
-            return [.middleFingerIntermediateTip, .indexFingerKnuckle, .ringFingerKnuckle]
+            // 目标：middleKnuckle → 相邻：middleIntermediateTip（上方）, middleIntermediateBase（更近的中节）
+            // 不包含 indexKnuckle 以避免与食指指根混淆
+            return [.middleFingerIntermediateTip, .middleFingerIntermediateBase]
 
         // 无名指
         case .ringTip:
@@ -176,8 +183,12 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
             return PinchConfig(maxDistance: 0.06, minDistance: 0.012)
         case .ringIntermediateTip, .littleIntermediateTip:
             return PinchConfig(maxDistance: 0.06, minDistance: 0.018)
-        case .indexKnuckle, .middleKnuckle:
-            return PinchConfig(maxDistance: 0.065, minDistance: 0.020)
+        case .indexKnuckle:
+            // 食指指根：较宽的范围，更高的最小阈值
+            return PinchConfig(maxDistance: 0.072, minDistance: 0.028)
+        case .middleKnuckle:
+            // 中指指根：稍窄的范围，避免与食指混淆
+            return PinchConfig(maxDistance: 0.068, minDistance: 0.022)
         case .ringKnuckle, .littleKnuckle:
             return PinchConfig(maxDistance: 0.065, minDistance: 0.025)
         }
@@ -214,7 +225,7 @@ struct PinchConfig: Sendable, Codable {
     let minDistance: Float
 }
 
-/// 单个手势的检测结果
+/// 单个手势的检测结果（原始数据，不含融合逻辑）
 struct PinchResult: Identifiable, Sendable {
     let gesture: ThumbPinchGesture
     let pinchValue: Float
@@ -223,34 +234,8 @@ struct PinchResult: Identifiable, Sendable {
     let neighborDistances: [HandSkeleton.JointName: Float]
     /// 余弦相似度得分（0-1，仅当有参考快照时有效）
     let cosineSimilarity: Float
-    /// 综合得分（距离+消歧+余弦相似度）
-    let combinedScore: Float
+    /// ML 模型置信度（0-1，仅当有 ML 模型时有效）
+    let mlConfidence: Float
 
     var id: Int { gesture.id }
-    var isPinched: Bool { combinedScore > 0.75 }
-
-    init(gesture: ThumbPinchGesture, pinchValue: Float, rawDistance: Float,
-         neighborDistances: [HandSkeleton.JointName: Float] = [:],
-         cosineSimilarity: Float = 0, hasReference: Bool = false) {
-        self.gesture = gesture
-        self.pinchValue = pinchValue
-        self.rawDistance = rawDistance
-        self.neighborDistances = neighborDistances
-        self.cosineSimilarity = cosineSimilarity
-
-        // 消歧加成：如果目标关节比所有相邻关节都近，给予加分
-        var disambiguationBonus: Float = 0
-        if !neighborDistances.isEmpty && rawDistance < Float.greatestFiniteMagnitude {
-            let closerCount = neighborDistances.values.filter { $0 > rawDistance }.count
-            // 目标关节比越多相邻关节近，加分越高（最多+0.1）
-            disambiguationBonus = 0.1 * Float(closerCount) / Float(neighborDistances.count)
-        }
-
-        // 如果有参考快照，使用混合得分；否则使用距离得分
-        if hasReference {
-            self.combinedScore = min(1.0, 0.35 * pinchValue + 0.55 * cosineSimilarity + 0.1 * disambiguationBonus * 10)
-        } else {
-            self.combinedScore = min(1.0, pinchValue + disambiguationBonus)
-        }
-    }
 }

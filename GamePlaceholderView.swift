@@ -16,7 +16,6 @@ struct GamePlaceholderView: View {
         @Bindable var model = model
         TimelineView(.periodic(from: .now, by: 0.033)) { context in
             let _ = context.date
-            let _ = { model.flushPinchDataToUI() }()
             VStack(spacing: 16) {
                 // Header
                 HStack {
@@ -70,6 +69,9 @@ struct GamePlaceholderView: View {
                 activeGestureDisplay
             }
             .padding(20)
+            .onChange(of: context.date) { _, _ in
+                model.flushPinchDataToUI()
+            }
         }
         .frame(minWidth: 600, minHeight: 480)
         .onDisappear {
@@ -80,11 +82,13 @@ struct GamePlaceholderView: View {
     // MARK: - Gesture Status Grid
 
     private func gestureStatusGrid(summaries: [ThumbPinchGesture: PinchSummary]) -> some View {
-        VStack(spacing: 6) {
+        let detectedGestures = [model.leftDetectedGesture.gesture, model.rightDetectedGesture.gesture].compactMap { $0 }
+        return VStack(spacing: 6) {
             ForEach(ThumbPinchGesture.FingerGroup.allCases, id: \.self) { group in
                 GestureGroupStatusRow(
                     group: group,
-                    summaries: summaries
+                    summaries: summaries,
+                    detectedGestures: detectedGestures
                 )
             }
         }
@@ -93,10 +97,7 @@ struct GamePlaceholderView: View {
     // MARK: - Active Gesture Display
 
     private var activeGestureDisplay: some View {
-        let allSummaries = model.leftPinchSummaries.merging(model.rightPinchSummaries) { l, r in
-            l.isPinched ? l : r
-        }
-        let activeGestures = ThumbPinchGesture.allCases.filter { allSummaries[$0]?.isPinched == true }
+        let activeGestures = [model.leftDetectedGesture.gesture, model.rightDetectedGesture.gesture].compactMap { $0 }
 
         return VStack(spacing: 8) {
             Text("当前激活手势")
@@ -136,13 +137,14 @@ struct GamePlaceholderView: View {
 struct GestureGroupStatusRow: View {
     let group: ThumbPinchGesture.FingerGroup
     let summaries: [ThumbPinchGesture: PinchSummary]
+    let detectedGestures: [ThumbPinchGesture]
 
     private var groupColor: Color {
         CyberpunkTheme.fingerColor(for: group)
     }
 
     private var anyPinched: Bool {
-        group.gestures.contains { summaries[$0]?.isPinched == true }
+        group.gestures.contains { detectedGestures.contains($0) }
     }
 
     var body: some View {
@@ -156,10 +158,11 @@ struct GestureGroupStatusRow: View {
             // 3 joint status indicators
             ForEach(group.gestures) { gesture in
                 let summary = summaries[gesture] ?? .zero
+                let isPinched = detectedGestures.contains(gesture)
                 GestureStatusCell(
                     label: gesture.shortLabel,
                     value: Float(summary.quantizedValue) / 20.0,
-                    isPinched: summary.isPinched,
+                    isPinched: isPinched,
                     color: groupColor
                 )
             }
