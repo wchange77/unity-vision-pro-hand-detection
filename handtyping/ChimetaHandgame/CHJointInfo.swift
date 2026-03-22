@@ -8,7 +8,7 @@
 import ARKit
 
 
-public struct HVJointInfo: Sendable, Equatable {
+public struct CHJointInfo: Sendable, Equatable {
     public let name: HandSkeleton.JointName
     public let isTracked: Bool
     // relative to anchor
@@ -30,8 +30,8 @@ public struct HVJointInfo: Sendable, Equatable {
         self.transformToParent = parentFromJointTransform
     }
     
-    public func reversedChirality() -> HVJointInfo {
-        return HVJointInfo(name: name, isTracked: isTracked, anchorFromJointTransform: transform.positionReversed, parentFromJointTransform: transformToParent.positionReversed)
+    public func reversedChirality() -> CHJointInfo {
+        return CHJointInfo(name: name, isTracked: isTracked, anchorFromJointTransform: transform.positionReversed, parentFromJointTransform: transformToParent.positionReversed)
     }
 
     public var position: SIMD3<Float> {

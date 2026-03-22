@@ -7,7 +7,7 @@
 
 import ARKit
 
-public extension HVHandInfo {
+public extension CHHandInfo {
     //world space direction
     public var fingersExtendedDirection: simd_float3 {
         return chirality == .left ? transform.columns.0.xyz : -transform.columns.0.xyz
@@ -21,7 +21,7 @@ public extension HVHandInfo {
     
     //in world space
     //direction: from knukle to tip of a finger
-    public func fingerPositionDirection(of finger: HVJointOfFinger) -> (position: SIMD3<Float>, direction: SIMD3<Float>) {
+    public func fingerPositionDirection(of finger: CHJointOfFinger) -> (position: SIMD3<Float>, direction: SIMD3<Float>) {
         let tip = finger.jointGroupNames.last!
         let tipLocal = allJoints[tip]?.position ?? .zero
         let tipWorld = transform * SIMD4(tipLocal, 1)

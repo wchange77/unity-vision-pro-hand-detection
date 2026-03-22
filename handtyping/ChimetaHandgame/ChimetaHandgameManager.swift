@@ -1,5 +1,5 @@
 //
-//  HandVectorTool.swift
+//  ChimetaHandgame.swift
 //  FingerDance
 //
 //  Created by 许同学 on 2023/12/24.
@@ -13,12 +13,12 @@ import QuartzCore
 private let timerGenHandInfo = PerfTimer("generateHandInfo")
 private let timerUpdateTransforms = PerfTimer("updateEntityTransforms")
 
-public class HandVectorManager {
+public class ChimetaHandgameManager {
     public var left: Entity?
     public var right: Entity?
     
-    public var leftHandVector: HVHandInfo?
-    public var rightHandVector: HVHandInfo?
+    public var leftHandInfo: CHHandInfo?
+    public var rightHandInfo: CHHandInfo?
 
     // Pre-generated mesh cache
     private var jointMesh: MeshResource?
@@ -54,11 +54,11 @@ public class HandVectorManager {
         return dict
     }()
     
-    public init(left: Entity? = nil, right: Entity? = nil, leftHandVector: HVHandInfo? = nil, rightHandVector: HVHandInfo? = nil) {
+    public init(left: Entity? = nil, right: Entity? = nil, leftHandInfo: CHHandInfo? = nil, rightHandInfo: CHHandInfo? = nil) {
         self.left = left
         self.right = right
-        self.leftHandVector = leftHandVector
-        self.rightHandVector = rightHandVector
+        self.leftHandInfo = leftHandInfo
+        self.rightHandInfo = rightHandInfo
         prepareHighlightMaterials()
     }
 
@@ -120,13 +120,13 @@ public class HandVectorManager {
     }
     
     @discardableResult
-    public func generateHandInfo(from handAnchor: HandAnchor) -> HVHandInfo? {
+    public func generateHandInfo(from handAnchor: HandAnchor) -> CHHandInfo? {
         let t0 = CACurrentMediaTime()
-        let handInfo = HVHandInfo(handAnchor: handAnchor)
+        let handInfo = CHHandInfo(handAnchor: handAnchor)
         if handAnchor.chirality == .left {
-            leftHandVector = handInfo
+            leftHandInfo = handInfo
         } else {
-            rightHandVector = handInfo
+            rightHandInfo = handInfo
         }
         timerGenHandInfo.record(CACurrentMediaTime() - t0)
         return handInfo
@@ -134,8 +134,8 @@ public class HandVectorManager {
     
     /// Update entity transforms directly (called by HandTrackingSystem ECS)
     /// When skeleton is NOT visible, skips ALL entity updates entirely.
-    /// Pinch detection uses HVHandInfo joint positions directly, not entity transforms.
-    public func updateEntityTransforms(chirality: HandAnchor.Chirality, handInfo: HVHandInfo) {
+    /// Pinch detection uses CHHandInfo joint positions directly, not entity transforms.
+    public func updateEntityTransforms(chirality: HandAnchor.Chirality, handInfo: CHHandInfo) {
         // When skeleton is not visible, don't touch entities at all.
         // No root transform update, no child updates — zero RealityKit overhead.
         guard isSkeletonVisible else { return }
@@ -218,14 +218,14 @@ public class HandVectorManager {
         if handAnchor.chirality == .left {
             left?.removeFromParent()
             left = nil
-            leftHandVector = nil
+            leftHandInfo = nil
             leftJointEntities = [:]
             leftCollisionEntities = [:]
             leftLineEntities = [:]
         } else if handAnchor.chirality == .right {
             right?.removeFromParent()
             right = nil
-            rightHandVector = nil
+            rightHandInfo = nil
             rightJointEntities = [:]
             rightCollisionEntities = [:]
             rightLineEntities = [:]
@@ -247,11 +247,11 @@ public class HandVectorManager {
         // Store rootEntity reference for later re-adding when skeleton toggled
         self.rootEntity = rootEntity
 
-        let handInfo: HVHandInfo?
+        let handInfo: CHHandInfo?
         if chirality == .left {
-            handInfo = leftHandVector
+            handInfo = leftHandInfo
         } else {
-            handInfo = rightHandVector
+            handInfo = rightHandInfo
         }
         guard let handInfo else { return }
 
@@ -337,10 +337,10 @@ public class HandVectorManager {
     // MARK: - Generate Hand Entity
 
     @MainActor
-    private func generateHandEntity(from handVector: HVHandInfo, filter: CollisionFilter = .default) -> (Entity, [String: ModelEntity], [String: Entity], [String: ModelEntity]) {
+    private func generateHandEntity(from handInfo: CHHandInfo, filter: CollisionFilter = .default) -> (Entity, [String: ModelEntity], [String: Entity], [String: ModelEntity]) {
         let hand = Entity()
-        hand.name = handVector.chirality == .left ? "leftHand" : "rightHand"
-        hand.transform.matrix = handVector.transform
+        hand.name = handInfo.chirality == .left ? "leftHand" : "rightHand"
+        hand.transform.matrix = handInfo.transform
 
         // Pre-generate meshes (one-time)
         if jointMesh == nil {
@@ -353,7 +353,7 @@ public class HandVectorManager {
         var lineCache: [String: ModelEntity] = [:]
 
         // Joint boxes (always created, but disabled when skeleton not visible)
-        for positionInfo in handVector.allJoints.values {
+        for positionInfo in handInfo.allJoints.values {
             let jointKey = positionInfo.name.codableName.rawValue
             let color = CyberpunkTheme.jointUIColor(for: jointKey)
             let material = UnlitMaterial(color: color)
@@ -370,7 +370,7 @@ public class HandVectorManager {
         // Collision entities — only create if collision is enabled (default: off)
         // This saves ~27 entities per hand in the normal use case.
         if isCollisionEnable {
-            for positionInfo in handVector.allJoints.values {
+            for positionInfo in handInfo.allJoints.values {
                 let jointKey = positionInfo.name.codableName.rawValue
                 let collisionEntity = Entity()
                 collisionEntity.components.set(CollisionComponent(shapes: [.generateSphere(radius: 0.008)], filter: filter))
@@ -386,8 +386,8 @@ public class HandVectorManager {
         if isSkeletonVisible {
             for jointName in HandSkeleton.JointName.allCases {
                 guard let parentName = jointName.parentName,
-                      let childJoint = handVector.allJoints[jointName],
-                      let parentJoint = handVector.allJoints[parentName] else { continue }
+                      let childJoint = handInfo.allJoints[jointName],
+                      let parentJoint = handInfo.allJoints[parentName] else { continue }
 
                 let jointKey = jointName.codableName.rawValue
                 let color = CyberpunkTheme.jointUIColor(for: jointKey)

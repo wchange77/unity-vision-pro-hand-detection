@@ -73,7 +73,7 @@ struct HandTrackingComponent: Component {
 ///
 /// Key performance decisions:
 /// - Entity transform updates happen here (sole owner, no double-update)
-/// - Uses HandVectorManager.updateEntityTransforms() which reads cached entity refs
+/// - Uses ChimetaHandgameManager.updateEntityTransforms() which reads cached entity refs
 /// - Does NOT read/write Component per frame (component is write-once at creation)
 /// - Gesture detection is throttled to ~12Hz
 struct HandTrackingSystem: System {
@@ -115,10 +115,10 @@ struct HandTrackingSystem: System {
 
         // Update entity transforms
         let tTransStart = CACurrentMediaTime()
-        if let leftInfo = manager.leftHandVector {
+        if let leftInfo = manager.leftHandInfo {
             manager.updateEntityTransforms(chirality: .left, handInfo: leftInfo)
         }
-        if let rightInfo = manager.rightHandVector {
+        if let rightInfo = manager.rightHandInfo {
             manager.updateEntityTransforms(chirality: .right, handInfo: rightInfo)
         }
         Self.timerTransforms.record(CACurrentMediaTime() - tTransStart)

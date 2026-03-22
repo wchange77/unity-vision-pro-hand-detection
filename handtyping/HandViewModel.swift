@@ -30,13 +30,13 @@ class HandViewModel: @unchecked Sendable {
 
     // Internal hand tracking manager — explicitly excluded from @Observable tracking
     @ObservationIgnored
-    var latestHandTracking: HandVectorManager = .init(left: nil, right: nil)
+    var latestHandTracking: ChimetaHandgameManager = .init(left: nil, right: nil)
 
-    var leftHandVector: HVHandInfo? {
-        latestHandTracking.leftHandVector
+    var leftHandInfo: CHHandInfo? {
+        latestHandTracking.leftHandInfo
     }
-    var rightHandVector: HVHandInfo? {
-        latestHandTracking.rightHandVector
+    var rightHandInfo: CHHandInfo? {
+        latestHandTracking.rightHandInfo
     }
     var isSkeletonVisible: Bool = false {
         didSet {
@@ -119,7 +119,7 @@ class HandViewModel: @unchecked Sendable {
     func detectAllPinchGestures() {
         let t0 = CACurrentMediaTime()
         var dirty = false
-        if let leftHand = latestHandTracking.leftHandVector {
+        if let leftHand = latestHandTracking.leftHandInfo {
             let newResults = detectPinch(for: leftHand)
             let newSummaries = quantizeSummaries(newResults)
             if newSummaries != pendingLeftSummaries {
@@ -128,7 +128,7 @@ class HandViewModel: @unchecked Sendable {
                 dirty = true
             }
         }
-        if let rightHand = latestHandTracking.rightHandVector {
+        if let rightHand = latestHandTracking.rightHandInfo {
             let newResults = detectPinch(for: rightHand)
             let newSummaries = quantizeSummaries(newResults)
             if newSummaries != pendingRightSummaries {
@@ -164,7 +164,7 @@ class HandViewModel: @unchecked Sendable {
         return summaries
     }
 
-    private func detectPinch(for handInfo: HVHandInfo) -> [ThumbPinchGesture: PinchResult] {
+    private func detectPinch(for handInfo: CHHandInfo) -> [ThumbPinchGesture: PinchResult] {
         guard let thumbTip = handInfo.allJoints[.thumbTip] else { return [:] }
         let thumbPos = thumbTip.position
 

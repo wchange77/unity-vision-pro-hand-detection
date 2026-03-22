@@ -1,13 +1,13 @@
 //
-//  HVFingerShape.swift
-//  HandVector
+//  CHFingerShape.swift
+//  ChimetaHandgame
 //
 //  Created by 许同学 on 2024/8/20.
 //
 
 import ARKit
 
-public struct HVFingerShape: Sendable, Equatable {
+public struct CHFingerShape: Sendable, Equatable {
     public enum FingerShapeType: Int, Sendable, Equatable, CaseIterable {
         case baseCurl = 1
         case tipCurl = 2
@@ -17,8 +17,8 @@ public struct HVFingerShape: Sendable, Equatable {
     }
     
     
-    public let finger: HVJointOfFinger
-    public let fingerShapeTypes: Set<HVFingerShape.FingerShapeType>
+    public let finger: CHJointOfFinger
+    public let fingerShapeTypes: Set<CHFingerShape.FingerShapeType>
     
     public let fullCurl: Float
     public let baseCurl: Float
@@ -29,10 +29,10 @@ public struct HVFingerShape: Sendable, Equatable {
     public let spread: Float?
     
     
-    public init(finger: HVJointOfFinger, fingerShapeType: HVFingerShape.FingerShapeType, joints: [HandSkeleton.JointName: HVJointInfo]) {
+    public init(finger: CHJointOfFinger, fingerShapeType: CHFingerShape.FingerShapeType, joints: [HandSkeleton.JointName: CHJointInfo]) {
         self.init(finger: finger, fingerShapeTypes: [fingerShapeType], joints: joints)
     }
-    public init(finger: HVJointOfFinger, fingerShapeTypes: Set<HVFingerShape.FingerShapeType> = .all, joints: [HandSkeleton.JointName: HVJointInfo]) {
+    public init(finger: CHJointOfFinger, fingerShapeTypes: Set<CHFingerShape.FingerShapeType> = .all, joints: [HandSkeleton.JointName: CHJointInfo]) {
         func linearInterpolate(lowerBound: Float, upperBound: Float, value: Float, clamp: Bool = true) -> Float {
             let p = (value-lowerBound)/(upperBound-lowerBound)
             if clamp {
@@ -172,7 +172,7 @@ public struct HVFingerShape: Sendable, Equatable {
     }
     
 }
-fileprivate extension HVFingerShape {
+fileprivate extension CHFingerShape {
     struct FingerShapeConfiguration {
         var maximumBaseCurlDegrees: Float
         var maximumTipCurlDegrees1: Float
@@ -205,8 +205,8 @@ fileprivate extension HVFingerShape {
         
     }
 }
-fileprivate extension HVJointOfFinger {
-    fileprivate var fingerShapeConfiguration: HVFingerShape.FingerShapeConfiguration {
+fileprivate extension CHJointOfFinger {
+    fileprivate var fingerShapeConfiguration: CHFingerShape.FingerShapeConfiguration {
         switch self {
         case .thumb:
             return .thumb
@@ -223,7 +223,7 @@ fileprivate extension HVJointOfFinger {
         }
     }
     
-    fileprivate var nextNeighbourFinger: HVJointOfFinger? {
+    fileprivate var nextNeighbourFinger: CHJointOfFinger? {
         switch self {
         case .thumb:
             return .indexFinger
@@ -240,6 +240,6 @@ fileprivate extension HVJointOfFinger {
         }
     }
 }
-public extension Set<HVFingerShape.FingerShapeType> {
-    public static let all: Set<HVFingerShape.FingerShapeType> = [.baseCurl, .tipCurl, .fullCurl, .pinch, .spread]
+public extension Set<CHFingerShape.FingerShapeType> {
+    public static let all: Set<CHFingerShape.FingerShapeType> = [.baseCurl, .tipCurl, .fullCurl, .pinch, .spread]
 }

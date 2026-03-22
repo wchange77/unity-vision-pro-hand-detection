@@ -1,5 +1,5 @@
 //
-//  HandVectorMatcher.swift
+//  ChimetaHandgame.swift
 //  FingerDance
 //
 //  Created by 许同学 on 2024/1/2.
@@ -9,9 +9,9 @@ import Foundation
 import simd
 import ARKit
 
-public struct HVHandInfo: Sendable, Equatable {
+public struct CHHandInfo: Sendable, Equatable {
     public let chirality: HandAnchor.Chirality
-    public let allJoints: [HandSkeleton.JointName: HVJointInfo]
+    public let allJoints: [HandSkeleton.JointName: CHJointInfo]
     public let transform: simd_float4x4
     
     /// Lazy-computed vectors (only needed for cosine similarity, NOT for pinch detection).
@@ -28,19 +28,19 @@ public struct HVHandInfo: Sendable, Equatable {
         return internalVectors[named.jointIndex]
     }
     
-    public static var builtinHandInfo: [String : HVHandInfo] = {
-        let dict = HVHandJsonModel.loadHandJsonModelDict(fileName: "BuiltinHand", bundle: handAssetsBundle)!.reduce(into: [String: HVHandInfo](), {
-            $0[$1.key] = $1.value.convertToHVHandInfo()
+    public static var builtinHandInfo: [String : CHHandInfo] = {
+        let dict = CHHandJsonModel.loadHandJsonModelDict(fileName: "BuiltinHand", bundle: handAssetsBundle)!.reduce(into: [String: CHHandInfo](), {
+            $0[$1.key] = $1.value.convertToCHHandInfo()
         })
         return dict
     }()
     
-    public func calculateFingerShape(finger: HVJointOfFinger, fingerShapeTypes: Set<HVFingerShape.FingerShapeType> = .all) -> HVFingerShape {
-        let shape = HVFingerShape(finger: finger, fingerShapeTypes: fingerShapeTypes, joints: allJoints)
+    public func calculateFingerShape(finger: CHJointOfFinger, fingerShapeTypes: Set<CHFingerShape.FingerShapeType> = .all) -> CHFingerShape {
+        let shape = CHFingerShape(finger: finger, fingerShapeTypes: fingerShapeTypes, joints: allJoints)
         return shape
     }
     
-    public init?(chirality: HandAnchor.Chirality, allJoints: [HandSkeleton.JointName: HVJointInfo], transform: simd_float4x4) {
+    public init?(chirality: HandAnchor.Chirality, allJoints: [HandSkeleton.JointName: CHJointInfo], transform: simd_float4x4) {
         if allJoints.count >= HandSkeleton.JointName.allCases.count {
             self.chirality = chirality
             self.allJoints = allJoints
@@ -67,28 +67,28 @@ public struct HVHandInfo: Sendable, Equatable {
     }
     
     
-    public func reversedChirality() -> HVHandInfo {
-        var infoNew: [HandSkeleton.JointName: HVJointInfo] = [:]
+    public func reversedChirality() -> CHHandInfo {
+        var infoNew: [HandSkeleton.JointName: CHJointInfo] = [:]
         for (name, info) in allJoints {
             infoNew[name] = info.reversedChirality()
         }
-        let m = HVHandInfo(chirality: chirality == .left ? .right : .left, allJoints: infoNew, transform: simd_float4x4([-transform.columns.0, transform.columns.1, -transform.columns.2, transform.columns.3]))!
+        let m = CHHandInfo(chirality: chirality == .left ? .right : .left, allJoints: infoNew, transform: simd_float4x4([-transform.columns.0, transform.columns.1, -transform.columns.2, transform.columns.3]))!
         return m
     }
 }
 
-private extension HVHandInfo {
-    static func generateJoints(from handSkeleton: HandSkeleton) -> [HandSkeleton.JointName: HVJointInfo] {
-        var joints: [HandSkeleton.JointName: HVJointInfo] = [:]
+private extension CHHandInfo {
+    static func generateJoints(from handSkeleton: HandSkeleton) -> [HandSkeleton.JointName: CHJointInfo] {
+        var joints: [HandSkeleton.JointName: CHJointInfo] = [:]
         HandSkeleton.JointName.allCases.forEach { jointName in
-            joints[jointName] = HVJointInfo(joint: handSkeleton.joint(jointName))
+            joints[jointName] = CHJointInfo(joint: handSkeleton.joint(jointName))
         }
         return joints
     }
 
     
     /// Optimized vector generation using simd operations
-    static func generateVectors(from positions: [HandSkeleton.JointName: HVJointInfo]) -> [simd_float3] {
+    static func generateVectors(from positions: [HandSkeleton.JointName: CHJointInfo]) -> [simd_float3] {
         // Pre-allocate array with known size (27 vectors)
         var vectors = [simd_float3]()
         vectors.reserveCapacity(27)
@@ -129,7 +129,7 @@ private extension HVHandInfo {
 
         // Helper function to calculate and normalize vector
         @inline(__always)
-        func addVector(from: HVJointInfo, to: HVJointInfo) {
+        func addVector(from: CHJointInfo, to: CHJointInfo) {
             let position4 = SIMD4(to.positionToParent, 0)
             let vector = (from.transformToParent * position4).xyz
             vectors.append(simd_normalize(vector))
