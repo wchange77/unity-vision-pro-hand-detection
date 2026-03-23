@@ -92,12 +92,6 @@ final class GameGestureEngine {
     @ObservationIgnored
     private weak var handViewModel: HandViewModel?
 
-    @ObservationIgnored
-    private var hasCalibration: Bool = false
-
-    @ObservationIgnored
-    private var hasML: Bool = false
-
     // MARK: - 初始化
 
     init() {}
@@ -105,8 +99,6 @@ final class GameGestureEngine {
     /// 绑定到 HandViewModel
     func bind(to viewModel: HandViewModel) {
         self.handViewModel = viewModel
-        self.hasCalibration = !viewModel.referenceHandInfos.isEmpty
-        self.hasML = viewModel.mlTrainer.isModelLoaded
     }
 
     /// 配置独立分类器参数（仅 independent 模式下生效）
@@ -142,6 +134,9 @@ final class GameGestureEngine {
 
         case .independent:
             // 使用游戏专用分类器（可自定义参数）
+            // 每帧读取最新校准状态（校准完成后立即生效）
+            let hasCalibration = !vm.referenceHandInfos.isEmpty
+            let hasML = vm.mlTrainer.isModelLoaded
             leftClass = classifier.classify(
                 results: leftResults, chirality: .left,
                 hasCalibration: hasCalibration, hasML: hasML

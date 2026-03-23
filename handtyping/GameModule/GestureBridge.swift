@@ -148,28 +148,30 @@ extension GestureClassification {
 
 /// 自定义手势活跃时，用 highPriorityGesture 消费系统 tap/drag，
 /// 防止系统 pinch（拇指+食指 = tap）误触发 UI 按钮。
-/// 无自定义手势时，handler 内 guard 直接 return，系统手势正常工作。
+/// 仅在游戏进行中生效；菜单流程中不拦截，确保按钮可点击。
 struct GesturePriorityModifier: ViewModifier {
     let session: GameSessionManager
 
     func body(content: Content) -> some View {
-        content
-            // 拦截系统 SpatialTapGesture（visionOS 的 pinch-to-tap）
-            .highPriorityGesture(
-                SpatialTapGesture()
-                    .onEnded { _ in
-                        // 自定义手势活跃时消费；否则 return 让系统处理
-                        guard session.isCustomGestureActive else { return }
-                    }
-            )
-            // 拦截系统 DragGesture
-            .highPriorityGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in
-                        guard session.isCustomGestureActive else { return }
-                    }
-                    .onEnded { _ in }
-            )
+        if session.isGamePlaying {
+            content
+                // 游戏中：拦截系统 SpatialTapGesture（visionOS 的 pinch-to-tap）
+                .highPriorityGesture(
+                    SpatialTapGesture()
+                        .onEnded { _ in
+                            // 消费系统 tap，防止误触
+                        }
+                )
+                // 拦截系统 DragGesture
+                .highPriorityGesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { _ in }
+                        .onEnded { _ in }
+                )
+        } else {
+            content
+            // 菜单流程：不拦截，系统 tap 正常工作（按钮可点击）
+        }
     }
 }
 
