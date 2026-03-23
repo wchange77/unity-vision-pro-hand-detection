@@ -182,7 +182,7 @@ class GestureClassifier {
         return .detected(best.key, confidence: best.value.pinchValue)
     }
 
-    // MARK: - ML保底 + 规则过滤
+    // MARK: - ML保底 + 规则软调节
 
     private func classifyByMLWithRuleFilter(
         results: [ThumbPinchGesture: PinchResult],
@@ -197,20 +197,28 @@ class GestureClassifier {
         let mlGesture = mlBest.key
         let mlConf = mlBest.value.mlConfidence
 
-        // 2. 规则过滤：如果有校准数据，用规则验证ML结果
-        if hasCalibration {
-            let ruleScore = calculateRuleScore(result: mlBest.value, hasCalibration: true)
-            // 动态阈值：有ML辅助时规则阈值降低
-            if ruleScore < ruleThresholdWithCalibration {
-                return .none
-            }
-            // 融合ML和规则得分
-            let finalScore = 0.6 * mlConf + 0.4 * ruleScore
+        // 2. 无校准：直接使用ML结果
+        guard hasCalibration else {
+            return .detected(mlGesture, confidence: mlConf)
+        }
+
+        // 3. 有校准：ML为主，规则作为软调节（不做硬拒绝）
+        let ruleScore = calculateRuleScore(result: mlBest.value, hasCalibration: true)
+
+        // ML高置信度(>0.65)：直接信任ML，规则只微调分数
+        if mlConf > 0.65 {
+            let finalScore = 0.8 * mlConf + 0.2 * ruleScore
             return .detected(mlGesture, confidence: finalScore)
         }
 
-        // 无校准：直接使用ML结果
-        return .detected(mlGesture, confidence: mlConf)
+        // ML中等置信度(0.45~0.65)：规则辅助验证
+        // 只有规则分数极低(<0.20)才拒绝（明显的误检测）
+        if ruleScore < 0.20 {
+            return .none
+        }
+
+        let finalScore = 0.65 * mlConf + 0.35 * ruleScore
+        return .detected(mlGesture, confidence: finalScore)
     }
 
     // MARK: - 规则得分计算
@@ -220,14 +228,15 @@ class GestureClassifier {
         let cosineSim = result.cosineSimilarity
 
         if hasCalibration {
-            // 有校准：距离35% + 余弦55% + 消歧10%
-            var score = 0.35 * pinchValue + 0.55 * cosineSim
+            // 有校准：距离50% + 余弦30% + 消歧20%
+            // （余弦从55%降到30%，因为它对手部朝向过度敏感）
+            var score = 0.50 * pinchValue + 0.30 * cosineSim
 
             // 消歧加成
             if !result.neighborDistances.isEmpty && result.rawDistance < Float.greatestFiniteMagnitude {
                 let closerCount = result.neighborDistances.values.filter { $0 > result.rawDistance }.count
                 let ratio = Float(closerCount) / Float(result.neighborDistances.count)
-                score += 0.1 * ratio
+                score += 0.20 * ratio
             }
 
             return min(1.0, score)
