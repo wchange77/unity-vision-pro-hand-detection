@@ -2,7 +2,8 @@
 //  handtypingApp.swift
 //  handtyping
 //
-//  Created by MacStudio on 2026/3/21.
+//  单窗口应用入口。
+//  主窗口 + 沉浸空间，GameSessionManager 在 App 层创建。
 //
 
 import SwiftUI
@@ -11,54 +12,19 @@ import SwiftUI
 struct handtypingApp: App {
 
     @State private var model = HandViewModel()
+    @State private var session = GameSessionManager()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(session: session)
                 .environment(model)
                 .onAppear {
                     model.loadActiveCalibration()
+                    session.start(with: model)
                 }
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 1, height: 0.6, depth: 0.1, in: .meters)
-
-        WindowGroup(id: "calibration") {
-            CalibrationView()
-                .environment(model)
-        }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
-
-        WindowGroup(id: "gameSelection") {
-            GameSelectionView()
-                .environment(model)
-        }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
-
-        WindowGroup(id: "gamePlaying") {
-            GamePlaceholderView()
-                .environment(model)
-        }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
-
-        WindowGroup(id: "pureML") {
-            PureMLView()
-                .environment(model)
-        }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
-
-        #if DEBUG
-        WindowGroup(id: "debugMLCollection") {
-            DebugMLDataCollectionView()
-                .environment(model)
-        }
-        .windowResizability(.contentSize)
-        .defaultSize(width: 0.8, height: 0.6, depth: 0.1, in: .meters)
-        #endif
 
         ImmersiveSpace(id: "pinchDetection") {
             PinchDetectionImmersiveView()

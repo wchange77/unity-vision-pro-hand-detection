@@ -10,9 +10,11 @@ import Foundation
 import CoreML
 import ARKit
 
-enum MLHandPoseConverter {
+/// Converts CHHandInfo to CoreML input format.
+/// All methods are nonisolated — pure computation with no shared mutable state.
+enum MLHandPoseConverter: Sendable {
 
-    static let keypointJoints: [HandSkeleton.JointName] = [
+    nonisolated static let keypointJoints: [HandSkeleton.JointName] = [
         .wrist,
         .thumbKnuckle, .thumbIntermediateBase, .thumbIntermediateTip, .thumbTip,
         .indexFingerKnuckle, .indexFingerIntermediateBase, .indexFingerIntermediateTip, .indexFingerTip,

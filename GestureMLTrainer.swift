@@ -15,6 +15,8 @@ import ARKit
 /// - 加载从 Mac 训练的 CoreML 模型 (.mlmodelc)
 /// - 推理：CHHandInfo → 手势分类 + 置信度
 /// - 训练在 visionOS 上跳过，使用规则检测
+/// Note: classify() is nonisolated and thread-safe because MLModel.prediction(from:) is thread-safe.
+/// Model loading happens on @MainActor; inference can run from any thread.
 @MainActor
 class GestureMLTrainer {
 
@@ -30,11 +32,13 @@ class GestureMLTrainer {
 
     private(set) var state: TrainingState = .idle
 
-    /// 已加载的 CoreML 模型
-    private var mlModel: MLModel?
+    /// 已加载的 CoreML 模型 — nonisolated(unsafe) because it is set on MainActor
+    /// during loading and read from background threads during inference.
+    /// MLModel itself is thread-safe for prediction calls.
+    nonisolated(unsafe) private var mlModel: MLModel?
 
     /// 模型是否已加载
-    var isModelLoaded: Bool { mlModel != nil }
+    nonisolated var isModelLoaded: Bool { mlModel != nil }
 
     /// 尝试训练 — visionOS 上直接跳过，使用规则检测
     func train(profile: CalibrationProfile) async -> URL? {
@@ -82,8 +86,8 @@ class GestureMLTrainer {
     // MARK: - Inference
 
     /// 对单帧手部数据进行分类，返回 (标签, 置信度) 数组，按置信度降序排列。
-    /// 调用者负责在合适的线程调用此方法。
-    func classify(handInfo: CHHandInfo) -> [(label: String, confidence: Float)]? {
+    /// nonisolated: MLModel.prediction(from:) is thread-safe, so inference can run from any thread.
+    nonisolated func classify(handInfo: CHHandInfo) -> [(label: String, confidence: Float)]? {
         guard let model = mlModel else { return nil }
         guard let inputArray = MLHandPoseConverter.convert(handInfo) else { return nil }
 
@@ -117,7 +121,7 @@ class GestureMLTrainer {
     }
 
     /// 便捷方法：获取最高置信度的手势分类结果
-    func classifyTopGesture(handInfo: CHHandInfo) -> (gesture: ThumbPinchGesture, confidence: Float)? {
+    nonisolated func classifyTopGesture(handInfo: CHHandInfo) -> (gesture: ThumbPinchGesture, confidence: Float)? {
         guard let results = classify(handInfo: handInfo),
               let top = results.first,
               let gesture = ThumbPinchGesture.from(mlLabel: top.label) else { return nil }

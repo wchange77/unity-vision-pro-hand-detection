@@ -1,31 +1,80 @@
 //
-//  ThumbPinchView.swift
+//  ThumbPinchView.swift → FusionDetectionView
 //  handtyping
 //
-//  Clean, performance-first UI for pinch gesture detection.
-//  Uses quantized summaries to minimize SwiftUI redraws.
+//  规则+ML 融合检测游戏视图。
+//  原 ThumbPinchView 改造：移除 toolbar 导航按钮，改用 session 参数。
+//  保持核心双手检测 + 性能面板功能不变。
 //
 
 import SwiftUI
 
-struct ThumbPinchView: View {
+struct FusionDetectionView: View {
     @Environment(HandViewModel.self) private var model
-    @Environment(\.openWindow) var openWindow
+    @Bindable var session: GameSessionManager
+
+    @State private var focusOnBack: Bool = false
 
     var body: some View {
-        @Bindable var model = model
-        // TimelineView drives UI updates at ~15Hz by polling from ECS buffers.
-        // This decouples the RealityKit render thread from SwiftUI's main thread.
         TimelineView(.periodic(from: .now, by: 0.033)) { context in
-            let _ = context.date // force view update each tick
+            let _ = context.date
             VStack(spacing: 0) {
-                // Top toolbar
-                toolbar(model: model)
+                // 简化标题栏
+                HStack(spacing: DesignTokens.Spacing.sm) {
+                    GestureNavButton(
+                        title: "返回",
+                        icon: "chevron.left",
+                        color: DesignTokens.Colors.accentAmber,
+                        isFocused: focusOnBack,
+                        action: { session.exitToLobby() }
+                    )
 
-                Divider().opacity(0.3)
+                    // Status indicator
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(model.turnOnImmersiveSpace
+                                  ? DesignTokens.Colors.success
+                                  : DesignTokens.Colors.error.opacity(0.6))
+                            .frame(width: 8, height: 8)
+                            .neonGlow(
+                                color: model.turnOnImmersiveSpace ? DesignTokens.Colors.success : .clear,
+                                radius: 4,
+                                intensity: model.turnOnImmersiveSpace ? 0.6 : 0,
+                                animated: false
+                            )
+                        Text(model.turnOnImmersiveSpace ? "Tracking" : "Offline")
+                            .font(DesignTokens.Typography.caption)
+                            .foregroundColor(model.turnOnImmersiveSpace ? .primary : .secondary)
+                    }
+
+                    Spacer()
+
+                    Text("融合检测")
+                        .font(.system(size: 18, weight: .bold, design: .rounded))
+                        .foregroundColor(.primary)
+
+                    Spacer()
+
+                    // Profile indicator
+                    if let profile = model.activeProfile {
+                        Label(profile.name, systemImage: "person.crop.circle.badge.checkmark")
+                            .font(.system(size: 12))
+                            .foregroundColor(DesignTokens.Colors.success)
+                    } else {
+                        Label("Default", systemImage: "person.crop.circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(.secondary)
+                    }
+
+                    mlTrainingIndicator(state: model.mlTrainingState)
+                }
+                .padding(.horizontal, DesignTokens.Spacing.md)
+                .padding(.vertical, 10)
+
+                Divider().opacity(0.15)
 
                 // Main content: left & right hand + perf panel
-                HStack(spacing: 20) {
+                HStack(spacing: DesignTokens.Spacing.lg) {
                     HandColumn(
                         title: "L",
                         summaries: model.leftPinchSummaries,
@@ -35,7 +84,7 @@ struct ThumbPinchView: View {
 
                     Divider()
                         .frame(height: 340)
-                        .opacity(0.2)
+                        .opacity(0.15)
 
                     HandColumn(
                         title: "R",
@@ -46,93 +95,35 @@ struct ThumbPinchView: View {
 
                     Divider()
                         .frame(height: 340)
-                        .opacity(0.2)
+                        .opacity(0.15)
 
-                    // Performance data panel (self-refreshing via TimelineView)
                     PerfPanelContainer()
                 }
-                .padding(16)
+                .padding(DesignTokens.Spacing.md)
             }
             .onChange(of: context.date) { _, _ in
                 model.flushPinchDataToUI()
             }
         }
         .frame(minWidth: 900, minHeight: 440)
+        .onChange(of: session.navRouter.latestEvent) { _, event in
+            guard let event else { return }
+            handleNavEvent(event)
+            session.navRouter.consumeEvent()
+        }
     }
 
-    // MARK: - Toolbar
-
-    private func toolbar(model: HandViewModel) -> some View {
-        @Bindable var m = model
-        return HStack(spacing: 12) {
-            // Status
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(model.turnOnImmersiveSpace ? CyberpunkTheme.neonGreen : CyberpunkTheme.statusRed.opacity(0.6))
-                    .frame(width: 8, height: 8)
-                Text(model.turnOnImmersiveSpace ? "Tracking" : "Offline")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(model.turnOnImmersiveSpace ? .primary : .secondary)
-            }
-
-            Spacer()
-
-            // Calibrate button — opens profile management
-            Button {
-                openWindow(id: "calibration")
-            } label: {
-                Label("Calibrate", systemImage: "tuningfork")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .tint(CyberpunkTheme.accentAmber)
-
-            // Game button — opens game selection
-            Button {
-                openWindow(id: "gameSelection")
-            } label: {
-                Label("Game", systemImage: "gamecontroller")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .tint(CyberpunkTheme.accentGreen)
-
-            // Pure ML button — opens pure ML detection view
-            Button {
-                openWindow(id: "pureML")
-            } label: {
-                Label("纯ML", systemImage: "brain")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .tint(CyberpunkTheme.neonCyan)
-
-            #if DEBUG
-            // ML Data Collection — debug only
-            Button {
-                openWindow(id: "debugMLCollection")
-            } label: {
-                Label("ML Data", systemImage: "brain.head.profile")
-                    .font(.system(size: 13, weight: .medium))
-            }
-            .tint(CyberpunkTheme.accentPurple)
-            #endif
-
-            Spacer()
-
-            // Profile indicator
-            if let profile = model.activeProfile {
-                Label(profile.name, systemImage: "person.crop.circle.badge.checkmark")
-                    .font(.system(size: 12))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
-            } else {
-                Label("Default", systemImage: "person.crop.circle")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-            }
-
-            // ML Training status indicator
-            mlTrainingIndicator(state: model.mlTrainingState)
+    private func handleNavEvent(_ event: GameNavEvent) {
+        switch event {
+        case .up:
+            focusOnBack = false
+        case .down:
+            focusOnBack = true
+        case .confirm:
+            if focusOnBack { session.exitToLobby() }
+        default:
+            break
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
     }
 
     @ViewBuilder
@@ -144,34 +135,34 @@ struct ThumbPinchView: View {
             case .preparing:
                 ProgressView().scaleEffect(0.5)
                 Text("准备训练")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonYellow)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.accentAmber)
             case .training(let progress):
                 ProgressView().scaleEffect(0.5)
                 Text(String(format: "训练 %.0f%%", progress * 100))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonCyan)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
             case .completed:
                 Image(systemName: "brain.filled.head.profile")
                     .font(.system(size: 10))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
                 Text("ML就绪")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.success)
             case .skippedRuleBased:
                 Image(systemName: "checkmark.seal.fill")
                     .font(.system(size: 10))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
                 Text("规则检测")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.success)
             case .failed:
                 Image(systemName: "exclamationmark.triangle")
                     .font(.system(size: 10))
-                    .foregroundColor(.red)
+                    .foregroundColor(DesignTokens.Colors.error)
                 Text("ML失败")
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(.red)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.error)
             }
         }
     }
@@ -186,11 +177,11 @@ struct HandColumn: View {
     let detectedGestures: [ThumbPinchGesture]
 
     var body: some View {
-        VStack(spacing: 4) {
+        VStack(spacing: DesignTokens.Spacing.xxs) {
             Text(title)
                 .font(.system(size: 18, weight: .bold, design: .rounded))
                 .foregroundColor(.primary.opacity(0.7))
-                .padding(.bottom, 4)
+                .padding(.bottom, DesignTokens.Spacing.xxs)
 
             ForEach(ThumbPinchGesture.FingerGroup.allCases, id: \.self) { group in
                 FingerGroupCard(
@@ -203,7 +194,7 @@ struct HandColumn: View {
     }
 }
 
-// MARK: - Finger Group Card
+// MARK: - Finger Group Card (glass morphism + neon accent)
 
 struct FingerGroupCard: View {
     let group: ThumbPinchGesture.FingerGroup
@@ -215,16 +206,21 @@ struct FingerGroupCard: View {
     }
 
     private var groupColor: Color {
-        CyberpunkTheme.fingerColor(for: group)
+        DesignTokens.Colors.finger(for: group)
     }
 
     var body: some View {
         HStack(spacing: 10) {
-            // Finger indicator
             VStack(spacing: 2) {
                 Image(systemName: fingerIcon)
                     .font(.system(size: 18))
-                    .foregroundColor(anyPinched ? CyberpunkTheme.neonGreen : groupColor.opacity(0.7))
+                    .foregroundColor(anyPinched ? DesignTokens.Colors.success : groupColor.opacity(0.7))
+                    .neonGlow(
+                        color: anyPinched ? DesignTokens.Colors.success : .clear,
+                        radius: 6,
+                        intensity: anyPinched ? 0.6 : 0,
+                        animated: false
+                    )
 
                 Text(group.rawValue)
                     .font(.system(size: 10, weight: .medium))
@@ -232,7 +228,6 @@ struct FingerGroupCard: View {
             }
             .frame(width: 44)
 
-            // 3 joint progress bars
             VStack(spacing: 4) {
                 ForEach(group.gestures) { gesture in
                     JointProgressRow(
@@ -246,15 +241,19 @@ struct FingerGroupCard: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(anyPinched ? groupColor.opacity(0.08) : Color.white.opacity(0.02))
+        .glassMaterial(
+            tint: anyPinched ? groupColor : .white,
+            cornerRadius: DesignTokens.Spacing.CornerRadius.small
         )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(anyPinched ? groupColor.opacity(0.3) : Color.white.opacity(0.05), lineWidth: 0.5)
+        .neonGlow(
+            color: anyPinched ? groupColor : .clear,
+            radius: 4,
+            intensity: anyPinched ? 0.3 : 0,
+            animated: false
         )
-        .animation(.snappy(duration: 0.2), value: anyPinched)
+        .animation(DesignTokens.Animation.quick, value: anyPinched)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(group.rawValue)指，\(anyPinched ? "已捏合" : "未捏合")")
     }
 
     private var fingerIcon: String {
@@ -284,18 +283,18 @@ struct JointProgressRow: View {
             Text(label)
                 .font(.system(size: 11, weight: .medium))
                 .frame(width: 28, alignment: .leading)
-                .foregroundColor(isPinched ? CyberpunkTheme.neonGreen : .secondary)
+                .foregroundColor(isPinched ? DesignTokens.Colors.success : .secondary)
 
             NeonProgressBar(
                 value: displayValue,
-                color: isPinched ? CyberpunkTheme.neonGreen : color
+                color: isPinched ? DesignTokens.Colors.success : color
             )
             .frame(width: 100)
 
             Text(String(format: "%d%%", summary.quantizedValue * 5))
-                .font(.system(size: 10, design: .monospaced))
+                .font(DesignTokens.Typography.monoDigit)
                 .frame(width: 34, alignment: .trailing)
-                .foregroundColor(isPinched ? CyberpunkTheme.neonGreen : .secondary.opacity(0.7))
+                .foregroundColor(isPinched ? DesignTokens.Colors.success : .secondary.opacity(0.7))
         }
     }
 }
@@ -312,16 +311,24 @@ struct SidebarToggleStyle: ToggleStyle {
             configuration.label
                 .foregroundColor(configuration.isOn ? .white : .secondary)
                 .frame(width: 80, height: 72)
-                .background(
-                    RoundedRectangle(cornerRadius: 14)
-                        .fill(configuration.isOn ? color.opacity(0.12) : Color.white.opacity(0.03))
+                .frostedGlass(
+                    intensity: configuration.isOn ? 0.6 : 0.3,
+                    cornerRadius: 14,
+                    borderWidth: configuration.isOn ? 1.5 : 0.5
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        .stroke(configuration.isOn ? color.opacity(0.5) : Color.white.opacity(0.08), lineWidth: 1)
+                        .stroke(configuration.isOn ? color.opacity(0.5) : .clear, lineWidth: 1)
+                )
+                .neonGlow(
+                    color: configuration.isOn ? color : .clear,
+                    radius: 4,
+                    intensity: configuration.isOn ? 0.3 : 0,
+                    animated: false
                 )
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(.isToggle)
     }
 }
 
@@ -334,15 +341,17 @@ struct SidebarButtonStyle: ButtonStyle {
         configuration.label
             .foregroundColor(configuration.isPressed ? .white : color)
             .frame(width: 80, height: 72)
-            .background(
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(configuration.isPressed ? color.opacity(0.2) : Color.white.opacity(0.03))
+            .frostedGlass(
+                intensity: configuration.isPressed ? 0.5 : 0.3,
+                cornerRadius: 14,
+                borderWidth: 0.5
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 14)
                     .stroke(color.opacity(0.4), lineWidth: 1)
             )
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(DesignTokens.Animation.quick, value: configuration.isPressed)
     }
 }
 
@@ -371,7 +380,7 @@ struct FingerGroupRow: View {
     }
 
     private var groupColor: Color {
-        CyberpunkTheme.fingerColor(for: group)
+        DesignTokens.Colors.finger(for: group)
     }
 
     var body: some View {
@@ -396,13 +405,9 @@ struct FingerGroupRow: View {
         }
         .padding(.vertical, 4)
         .padding(.horizontal, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10)
-                .fill(anyPinched ? groupColor.opacity(0.06) : Color.white.opacity(0.015))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(anyPinched ? groupColor.opacity(0.25) : Color.white.opacity(0.04), lineWidth: 1)
+        .glassMaterial(
+            tint: anyPinched ? groupColor : .white,
+            cornerRadius: DesignTokens.Spacing.CornerRadius.small
         )
     }
 }
@@ -420,26 +425,24 @@ struct PinchProgressRow: View {
             Text(label)
                 .font(.system(size: 12, weight: .medium))
                 .frame(width: 30, alignment: .leading)
-                .foregroundColor(isPinched ? CyberpunkTheme.neonGreen : .secondary)
+                .foregroundColor(isPinched ? DesignTokens.Colors.success : .secondary)
 
             NeonProgressBar(
                 value: value,
-                color: isPinched ? CyberpunkTheme.neonGreen : color
+                color: isPinched ? DesignTokens.Colors.success : color
             )
             .frame(width: 100)
 
             Text(String(format: "%.0f%%", value * 100))
-                .font(.system(size: 10, design: .monospaced))
+                .font(DesignTokens.Typography.monoDigit)
                 .frame(width: 36, alignment: .trailing)
-                .foregroundColor(isPinched ? CyberpunkTheme.neonGreen : .secondary.opacity(0.7))
+                .foregroundColor(isPinched ? DesignTokens.Colors.success : .secondary.opacity(0.7))
         }
     }
 }
+
 // MARK: - Performance Data Panel
 
-// MARK: - Self-Refreshing Performance Panel Container
-
-/// Uses TimelineView to refresh every second, independent of gesture state
 struct PerfPanelContainer: View {
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1.0)) { context in
@@ -467,44 +470,41 @@ struct PerfPanel: View {
     let entityCount: Int
 
     private var fpsColor: Color {
-        if ecsFPS >= 72 { return CyberpunkTheme.neonGreen }
-        if ecsFPS >= 45 { return .orange }
-        return .red
+        if ecsFPS >= 72 { return DesignTokens.Colors.success }
+        if ecsFPS >= 45 { return DesignTokens.Colors.warning }
+        return DesignTokens.Colors.error
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Performance")
                 .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.accentBlue)
+                .foregroundColor(DesignTokens.Colors.accentBlue)
                 .padding(.bottom, 2)
 
-            // Key metrics: FPS and entity count
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("ECS FPS")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text(String(format: "%.0f", ecsFPS))
-                        .font(.system(size: 22, weight: .bold, design: .monospaced))
-                        .foregroundColor(fpsColor)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Entities")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text("\(entityCount)")
-                        .font(.system(size: 22, weight: .bold, design: .monospaced))
-                        .foregroundColor(entityCount > 60 ? .red : entityCount > 30 ? .orange : CyberpunkTheme.neonGreen)
-                }
+            HStack(spacing: DesignTokens.Spacing.md) {
+                MetricBadge(
+                    label: "ECS FPS",
+                    value: String(format: "%.0f", ecsFPS),
+                    color: fpsColor
+                )
+                MetricBadge(
+                    label: "Entities",
+                    value: "\(entityCount)",
+                    color: entityCount > 60
+                        ? DesignTokens.Colors.error
+                        : entityCount > 30
+                            ? DesignTokens.Colors.warning
+                            : DesignTokens.Colors.success
+                )
             }
             .padding(.bottom, 4)
 
-            Divider().opacity(0.2)
+            Divider().opacity(0.15)
 
             if snapshots.isEmpty {
                 Text("Waiting for data...")
-                    .font(.system(size: 11, design: .monospaced))
+                    .font(DesignTokens.Typography.mono)
                     .foregroundColor(.secondary)
             } else {
                 ForEach(snapshots, id: \.name) { snap in
@@ -515,7 +515,27 @@ struct PerfPanel: View {
             Spacer()
         }
         .frame(width: 200)
-        .padding(.vertical, 8)
+        .padding(.vertical, DesignTokens.Spacing.xs)
+        .padding(.horizontal, DesignTokens.Spacing.xs)
+        .frostedGlass(cornerRadius: DesignTokens.Spacing.CornerRadius.medium)
+    }
+}
+
+struct MetricBadge: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.system(size: 9, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.6))
+            Text(value)
+                .font(.system(size: 22, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -523,9 +543,9 @@ struct PerfRow: View {
     let snapshot: PerfSnapshot
 
     private var avgColor: Color {
-        if snapshot.avgMs > 5.0 { return .red }
-        if snapshot.avgMs > 2.0 { return .orange }
-        return CyberpunkTheme.neonGreen
+        if snapshot.avgMs > 5.0 { return DesignTokens.Colors.error }
+        if snapshot.avgMs > 2.0 { return DesignTokens.Colors.warning }
+        return DesignTokens.Colors.success
     }
 
     var body: some View {
@@ -535,43 +555,30 @@ struct PerfRow: View {
                 .foregroundColor(.secondary)
 
             HStack(spacing: 8) {
-                // Avg
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("avg")
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text(String(format: "%.2fms", snapshot.avgMs))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(avgColor)
-                }
-
-                // Max
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("max")
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text(String(format: "%.2fms", snapshot.maxMs))
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.secondary)
-                }
-
-                // Calls/s
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("Hz")
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text("\(snapshot.callsPerSec)")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.accentBlue)
-                }
+                PerfMetric(label: "avg", value: String(format: "%.2fms", snapshot.avgMs), color: avgColor)
+                PerfMetric(label: "max", value: String(format: "%.2fms", snapshot.maxMs), color: .secondary)
+                PerfMetric(label: "Hz", value: "\(snapshot.callsPerSec)", color: DesignTokens.Colors.accentBlue)
             }
         }
         .padding(.vertical, 3)
         .padding(.horizontal, 6)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.02))
-        )
+        .glassMaterial(cornerRadius: 6)
     }
 }
 
+struct PerfMetric: View {
+    let label: String
+    let value: String
+    let color: Color
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(label)
+                .font(.system(size: 8, design: .monospaced))
+                .foregroundColor(.secondary.opacity(0.6))
+            Text(value)
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundColor(color)
+        }
+    }
+}

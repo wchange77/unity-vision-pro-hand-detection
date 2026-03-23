@@ -8,6 +8,7 @@
 import RealityKit
 import ARKit
 import UIKit
+import SwiftUI
 import QuartzCore
 
 private let timerGenHandInfo = PerfTimer("generateHandInfo")
@@ -24,12 +25,26 @@ public class ChimetaHandgameManager {
     private var jointMesh: MeshResource?
     private var lineMesh: MeshResource?
 
-    // Default material cache (by joint name)
-    private var defaultMaterials: [String: UnlitMaterial] = [:]
-    // Cached highlight materials palette (10% steps from white to yellow)
+    // Default material cache (by joint name) — glass materials from MaterialFactory
+    private var defaultMaterials: [String: any RealityKit.Material] = [:]
+    // Cached highlight materials palette (holographic per-finger)
     private var highlightMaterials: [Int: UnlitMaterial] = [:]
     // Pinched material (green)
     private lazy var greenMaterial = UnlitMaterial(color: CyberpunkTheme.neonGreenUI)
+
+    // VisionUI enhanced materials (per-finger prefix)
+    private var glassMaterials: [String: any RealityKit.Material] = [:]
+    private var holoHighlightMaterials: [String: any RealityKit.Material] = [:]
+    private var holoPinchedMaterial: (any RealityKit.Material)?
+
+    // Thumb tip neon trail
+    private let trailLength = 20
+    private var trailEntities: [ModelEntity] = []
+    private var trailPositions: [SIMD3<Float>] = []
+    private var trailWriteIndex = 0
+    private var trailMesh: MeshResource?
+    /// Which chirality to show trail for (set externally)
+    var trailChirality: HandAnchor.Chirality? = .right
 
     // Previously highlighted joints
     private var lastHighlightedLeft: Set<String> = []
@@ -69,6 +84,35 @@ public class ChimetaHandgameManager {
             let color = UIColor(red: 1, green: 1, blue: 1 - t, alpha: 1)
             highlightMaterials[i] = UnlitMaterial(color: color)
         }
+    }
+
+    /// Pre-create VisionUI enhanced materials (glass + holographic)
+    @MainActor
+    private func prepareEnhancedMaterials() {
+        guard glassMaterials.isEmpty else { return }
+        let map: [(String, Color)] = [
+            ("thumb",        Color(red: 0.35, green: 0.68, blue: 1.0)),
+            ("indexFinger",  Color(red: 0.95, green: 0.45, blue: 0.65)),
+            ("middleFinger", Color(red: 0.40, green: 0.85, blue: 0.55)),
+            ("ringFinger",   Color(red: 0.95, green: 0.75, blue: 0.30)),
+            ("littleFinger", Color(red: 1.0, green: 0.6, blue: 0.3)),
+            ("wrist",        .white)
+        ]
+        for (prefix, color) in map {
+            glassMaterials[prefix] = MaterialFactory.glass(tint: color, opacity: 0.6, roughness: 0.15)
+            holoHighlightMaterials[prefix] = MaterialFactory.holographic(color: color, intensity: 1.5)
+        }
+        holoPinchedMaterial = MaterialFactory.holographic(color: Color(red: 0.30, green: 0.90, blue: 0.45), intensity: 2.0)
+    }
+
+    /// Extract finger prefix from joint key
+    private static func fingerPrefix(for jointKey: String) -> String {
+        if jointKey.hasPrefix("thumb") { return "thumb" }
+        if jointKey.hasPrefix("indexFinger") { return "indexFinger" }
+        if jointKey.hasPrefix("middleFinger") { return "middleFinger" }
+        if jointKey.hasPrefix("ringFinger") { return "ringFinger" }
+        if jointKey.hasPrefix("littleFinger") { return "littleFinger" }
+        return "wrist"
     }
 
     /// Get a cached highlight material for a given pinch value
@@ -194,6 +238,9 @@ public class ChimetaHandgameManager {
             }
         }
 
+        // Update thumb tip neon trail
+        updateThumbTrail(chirality: chirality, handInfo: handInfo)
+
         timerUpdateTransforms.record(CACurrentMediaTime() - t0)
     }
 
@@ -230,6 +277,22 @@ public class ChimetaHandgameManager {
             rightCollisionEntities = [:]
             rightLineEntities = [:]
         }
+    }
+
+    /// 清除所有手部实体（用于强制重建）
+    public func removeAllHands() {
+        left?.removeFromParent()
+        left = nil
+        leftHandInfo = nil
+        leftJointEntities = [:]
+        leftCollisionEntities = [:]
+        leftLineEntities = [:]
+        right?.removeFromParent()
+        right = nil
+        rightHandInfo = nil
+        rightJointEntities = [:]
+        rightCollisionEntities = [:]
+        rightLineEntities = [:]
     }
 
     /// Check if we already have an entity for this chirality
@@ -276,6 +339,28 @@ public class ChimetaHandgameManager {
         if isSkeletonVisible {
             rootEntity?.addChild(entity)
         }
+
+        // Create thumb trail entities on first hand setup (attached to rootEntity for world coords)
+        if trailEntities.isEmpty {
+            createTrailEntities(rootEntity: rootEntity)
+        }
+    }
+
+    /// 恢复脱离场景图的骨架实体。
+    /// 当 rootEntity 被重建（如沉浸空间重启）后调用，将已有的 left/right 重新挂到新 rootEntity。
+    @MainActor
+    public func recoverDetachedEntities(rootEntity: Entity?) {
+        guard let rootEntity else { return }
+        self.rootEntity = rootEntity
+        guard isSkeletonVisible else { return }
+        if let left, left.parent == nil {
+            rootEntity.addChild(left)
+            setChildrenVisibility(entity: left)
+        }
+        if let right, right.parent == nil {
+            rootEntity.addChild(right)
+            setChildrenVisibility(entity: right)
+        }
     }
 
     // MARK: - Pinch Visual Feedback (using cached entity references)
@@ -318,16 +403,24 @@ public class ChimetaHandgameManager {
             }
         }
 
-        // Update currently highlighted joints
+        // Update currently highlighted joints — holographic materials
         for (jointKey, h) in currentHighlighted {
             if let box = cachedEntities[jointKey] {
                 let scale: Float = 1.0 + h.value * 0.8
                 box.scale = SIMD3(repeating: scale)
                 if h.pinched {
-                    box.model?.materials = [greenMaterial]
+                    if let holo = holoPinchedMaterial {
+                        box.model?.materials = [holo]
+                    } else {
+                        box.model?.materials = [greenMaterial]
+                    }
                 } else {
-                    // Use cached material instead of creating new one
-                    box.model?.materials = [cachedHighlightMaterial(for: h.value)]
+                    let prefix = Self.fingerPrefix(for: jointKey)
+                    if let holoHighlight = holoHighlightMaterials[prefix] {
+                        box.model?.materials = [holoHighlight]
+                    } else {
+                        box.model?.materials = [cachedHighlightMaterial(for: h.value)]
+                    }
                 }
             }
         }
@@ -345,21 +438,24 @@ public class ChimetaHandgameManager {
 
         // Pre-generate meshes (one-time)
         if jointMesh == nil {
-            jointMesh = .generateBox(size: 0.008, cornerRadius: 0.001)
+            jointMesh = .generateBox(size: 0.008, cornerRadius: 0.003) // 增大圆角，玻璃质感更好
             lineMesh = .generateCylinder(height: 1.0, radius: 0.001)
         }
+
+        // Prepare VisionUI enhanced materials (one-time)
+        prepareEnhancedMaterials()
 
         var jointCache: [String: ModelEntity] = [:]
         var collisionCache: [String: Entity] = [:]
         var lineCache: [String: ModelEntity] = [:]
 
-        // Joint boxes (always created, but disabled when skeleton not visible)
+        // Joint boxes — glass materials from VisionUI MaterialFactory
         for positionInfo in handInfo.allJoints.values {
             let jointKey = positionInfo.name.codableName.rawValue
-            let color = CyberpunkTheme.jointUIColor(for: jointKey)
-            let material = UnlitMaterial(color: color)
+            let prefix = Self.fingerPrefix(for: jointKey)
+            let material: any RealityKit.Material = glassMaterials[prefix] ?? UnlitMaterial(color: CyberpunkTheme.jointUIColor(for: jointKey))
             defaultMaterials[jointKey] = material
-            
+
             let box = ModelEntity(mesh: jointMesh!, materials: [material])
             box.transform.matrix = positionInfo.transform
             box.name = jointKey + "-model"
@@ -382,8 +478,7 @@ public class ChimetaHandgameManager {
             }
         }
 
-        // Skeleton lines — only create if skeleton is visible
-        // This saves ~26 entities per hand when skeleton is hidden.
+        // Skeleton lines — glass materials for spatial depth
         if isSkeletonVisible {
             for jointName in HandSkeleton.JointName.allCases {
                 guard let parentName = jointName.parentName,
@@ -391,8 +486,9 @@ public class ChimetaHandgameManager {
                       let parentJoint = handInfo.allJoints[parentName] else { continue }
 
                 let jointKey = jointName.codableName.rawValue
-                let color = CyberpunkTheme.jointUIColor(for: jointKey)
-                let lineEntity = createLineEntity(from: parentJoint.position, to: childJoint.position, color: color)
+                let prefix = Self.fingerPrefix(for: jointKey)
+                let lineMaterial: any RealityKit.Material = glassMaterials[prefix] ?? UnlitMaterial(color: CyberpunkTheme.jointUIColor(for: jointKey).withAlphaComponent(0.5))
+                let lineEntity = createLineEntity(from: parentJoint.position, to: childJoint.position, material: lineMaterial)
                 lineEntity.name = jointKey + "-line"
                 hand.addChild(lineEntity)
                 lineCache[jointKey] = lineEntity
@@ -402,16 +498,69 @@ public class ChimetaHandgameManager {
         return (hand, jointCache, collisionCache, lineCache)
     }
 
+    // MARK: - Thumb Tip Neon Trail
+
+    /// Create trail entities attached to rootEntity (world-space coordinates)
+    @MainActor
+    func createTrailEntities(rootEntity: Entity?) {
+        guard trailEntities.isEmpty, let rootEntity else { return }
+        if trailMesh == nil {
+            trailMesh = .generateSphere(radius: 0.003)
+        }
+        trailPositions = Array(repeating: .zero, count: trailLength)
+        trailWriteIndex = 0
+        for i in 0..<trailLength {
+            let intensity = Float(trailLength - i) / Float(trailLength)
+            let material = MaterialFactory.neon(color: Color(red: 0.35, green: 0.68, blue: 1.0), intensity: intensity)
+            let entity = ModelEntity(mesh: trailMesh!, materials: [material])
+            entity.name = "trail-\(i)"
+            entity.isEnabled = false
+            rootEntity.addChild(entity)
+            trailEntities.append(entity)
+        }
+    }
+
+    /// Update thumb tip trail (called from updateEntityTransforms for the selected hand)
+    func updateThumbTrail(chirality: HandAnchor.Chirality, handInfo: CHHandInfo) {
+        guard isSkeletonVisible,
+              chirality == trailChirality,
+              !trailEntities.isEmpty,
+              let thumbTip = handInfo.allJoints[.thumbTip] else { return }
+
+        // Use world-space position: joint local position transformed by hand transform
+        let localPos = thumbTip.position
+        let handTransform = handInfo.transform
+        let worldPos = SIMD3<Float>(
+            handTransform.columns.3.x + handTransform.columns.0.x * localPos.x + handTransform.columns.1.x * localPos.y + handTransform.columns.2.x * localPos.z,
+            handTransform.columns.3.y + handTransform.columns.0.y * localPos.x + handTransform.columns.1.y * localPos.y + handTransform.columns.2.y * localPos.z,
+            handTransform.columns.3.z + handTransform.columns.0.z * localPos.x + handTransform.columns.1.z * localPos.y + handTransform.columns.2.z * localPos.z
+        )
+
+        trailPositions[trailWriteIndex] = worldPos
+        trailWriteIndex = (trailWriteIndex + 1) % trailLength
+
+        for i in 0..<trailLength {
+            let idx = (trailWriteIndex - 1 - i + trailLength) % trailLength
+            let entity = trailEntities[i]
+            let pos = trailPositions[idx]
+            if pos == .zero {
+                entity.isEnabled = false
+            } else {
+                entity.isEnabled = true
+                entity.position = pos
+            }
+        }
+    }
+
     // MARK: - Line Utilities
 
     @MainActor
-    private func createLineEntity(from start: SIMD3<Float>, to end: SIMD3<Float>, color: UIColor) -> ModelEntity {
+    private func createLineEntity(from start: SIMD3<Float>, to end: SIMD3<Float>, material: any RealityKit.Material) -> ModelEntity {
         let distance = simd_distance(start, end)
         guard distance > 0.001 else {
-            return ModelEntity(mesh: jointMesh ?? .generateBox(size: 0.002), materials: [UnlitMaterial(color: color)])
+            return ModelEntity(mesh: jointMesh ?? .generateBox(size: 0.002), materials: [material])
         }
 
-        let material = UnlitMaterial(color: color.withAlphaComponent(0.5))
         let cylinder = ModelEntity(mesh: lineMesh!, materials: [material])
 
         let midpoint = (start + end) / 2

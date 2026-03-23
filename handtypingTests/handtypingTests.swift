@@ -99,18 +99,13 @@ enum MockHandFactory {
     }
 
     /// Create a hand where the thumb tip is moved to be very close to a specific joint.
-    /// - Parameters:
-    ///   - targetJoint: The joint the thumb should be near (simulating a pinch to that joint).
-    ///   - distance: How far the thumb tip should be from the target (default: very close).
     static func makeHandPinching(
         to targetJoint: HandSkeleton.JointName,
         distance: Float = 0.005,
         chirality: HandAnchor.Chirality = .right
     ) -> CHHandInfo? {
         var positions = defaultPositions
-        // Move thumb tip to be `distance` meters from the target joint
         let targetPos = positions[targetJoint]!
-        // Place thumb tip along −X direction from target
         positions[.thumbTip] = targetPos + SIMD3(-distance, 0, 0)
         return makeHandInfo(chirality: chirality, positions: positions)
     }
@@ -154,10 +149,9 @@ final class GestureDetectionTests: XCTestCase {
         let indexTipResult = results[.indexTip]
         XCTAssertNotNil(indexTipResult, "Should have result for indexTip gesture")
         XCTAssertGreaterThan(indexTipResult!.pinchValue, 0.8, "Pinch value should be high when close")
-        XCTAssertTrue(indexTipResult!.isPinched, "Should be considered pinched when very close")
     }
 
-    /// When thumb is far from all joints (relaxed hand), no gesture should be pinched.
+    /// When thumb is far from all joints (relaxed hand), no gesture should have high pinch value.
     @MainActor
     func testDetectPinch_relaxedHand_noPinch() {
         guard let hand = MockHandFactory.makeRelaxedHand() else {
@@ -170,7 +164,7 @@ final class GestureDetectionTests: XCTestCase {
         for gesture in ThumbPinchGesture.allCases {
             let result = results[gesture]
             XCTAssertNotNil(result, "Should have result for \(gesture.displayName)")
-            XCTAssertFalse(result!.isPinched, "\(gesture.displayName) should NOT be pinched in relaxed hand")
+            XCTAssertLessThan(result!.pinchValue, 0.75, "\(gesture.displayName) should NOT have high pinch value in relaxed hand")
         }
     }
 
@@ -204,7 +198,6 @@ final class GestureDetectionTests: XCTestCase {
         let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
         let result = results[.indexTip]!
 
-        // indexTip has 2 neighbors: indexFingerIntermediateTip, middleFingerTip
         XCTAssertEqual(result.neighborDistances.count, ThumbPinchGesture.indexTip.neighborJointNames.count,
                        "Should have exactly the right number of neighbor distances")
 
@@ -230,16 +223,12 @@ final class GestureDetectionTests: XCTestCase {
             XCTAssertGreaterThan(neighborDist, result.rawDistance,
                                  "Neighbor should be farther than the primary target when pinching correctly")
         }
-
-        // The combined score should include a disambiguation bonus
-        XCTAssertGreaterThan(result.combinedScore, result.pinchValue,
-                             "Combined score should be higher than raw pinch value due to disambiguation bonus")
     }
 
     // MARK: - PinchResult Scoring
 
-    /// Test PinchResult init with no reference: score = pinchValue + disambiguationBonus
-    func testPinchResult_noReference_scoring() {
+    /// Test PinchResult init with standard parameters
+    func testPinchResult_basicScoring() {
         let result = PinchResult(
             gesture: .indexTip,
             pinchValue: 0.9,
@@ -249,36 +238,16 @@ final class GestureDetectionTests: XCTestCase {
                 .middleFingerTip: 0.05
             ],
             cosineSimilarity: 0,
-            hasReference: false
+            mlConfidence: 0
         )
 
-        // Both neighbors are farther than rawDistance (0.01), so bonus = 0.1 * 2/2 = 0.1
-        // combinedScore = min(1.0, 0.9 + 0.1) = 1.0
-        XCTAssertEqual(result.combinedScore, 1.0, accuracy: 0.01)
-        XCTAssertTrue(result.isPinched)
+        XCTAssertEqual(result.pinchValue, 0.9, accuracy: 0.01)
+        XCTAssertEqual(result.rawDistance, 0.01, accuracy: 0.001)
+        XCTAssertEqual(result.neighborDistances.count, 2)
     }
 
-    /// Test PinchResult when primary is NOT closer than neighbors → no disambiguation bonus.
-    func testPinchResult_noDisambiguation_whenPrimaryFarther() {
-        let result = PinchResult(
-            gesture: .indexTip,
-            pinchValue: 0.5,
-            rawDistance: 0.04,
-            neighborDistances: [
-                .indexFingerIntermediateTip: 0.02,  // neighbor closer!
-                .middleFingerTip: 0.03               // neighbor closer!
-            ],
-            cosineSimilarity: 0,
-            hasReference: false
-        )
-
-        // No neighbors are farther, so bonus = 0
-        // combinedScore = 0.5
-        XCTAssertEqual(result.combinedScore, 0.5, accuracy: 0.01)
-    }
-
-    /// Test PinchResult with reference: uses weighted formula
-    func testPinchResult_withReference_scoring() {
+    /// Test PinchResult with cosine similarity
+    func testPinchResult_withCosineSimilarity() {
         let result = PinchResult(
             gesture: .middleTip,
             pinchValue: 0.8,
@@ -289,63 +258,193 @@ final class GestureDetectionTests: XCTestCase {
                 .ringFingerTip: 0.06
             ],
             cosineSimilarity: 0.95,
-            hasReference: true
+            mlConfidence: 0.8
         )
 
-        // All 3 neighbors farther → bonus = 0.1 * 3/3 = 0.1
-        // combinedScore = min(1.0, 0.35*0.8 + 0.55*0.95 + 0.1*0.1*10) = 0.28+0.5225+0.1 = 0.9025
-        XCTAssertGreaterThan(result.combinedScore, 0.8)
-        XCTAssertTrue(result.isPinched)
+        XCTAssertGreaterThan(result.cosineSimilarity, 0.9)
+        XCTAssertGreaterThan(result.mlConfidence, 0.7)
     }
 }
 
-// MARK: - Navigation Tests
+// MARK: - Navigation Tests (using new GestureNavigationRouter)
 
 final class GestureNavigationTests: XCTestCase {
 
+    /// Verify navigation gesture mapping works via GestureNavigationRouter
     @MainActor
-    func testNavGestureMapping() {
-        // Verify the 5 navigation gestures map correctly
-        let model = HandViewModel()
-
-        // Simulate: middleTip pinched → should generate .up
-        model.leftPinchSummaries[.middleTip] = PinchSummary(quantizedValue: 20, isPinched: true, rawDistance: 0.01)
-        model.checkGestureNavigation()
-        XCTAssertEqual(model.latestNavEvent, .up, "middleTip should map to .up")
-
-        // Reset
-        model.latestNavEvent = nil
-        model.leftPinchSummaries = [:]
-
-        // Allow debounce to pass (simulate passage of time by using a different gesture)
-        // In real code, debounce is 0.4s. We set lastNavTime via flush. For testing,
-        // we need to force reset the internal debounce. Since lastNavTime is private,
-        // we test multiple events within a single test by waiting or resetting model.
+    func testNavGestureMapping_up() {
+        let router = GestureNavigationRouter()
+        let snapshot = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot, selectedChirality: .right)
+        XCTAssertEqual(router.latestEvent, .up, "middleTip should map to .up")
     }
 
-    /// When isGamePlaying is true, checkGestureNavigation should NOT emit events.
+    /// Verify all 5 navigation gestures map correctly
     @MainActor
-    func testNavEvent_suppressedWhenGamePlaying() {
-        let model = HandViewModel()
-        model.isGamePlaying = true
+    func testNavGestureMapping_allDirections() {
+        let mappings: [(ThumbPinchGesture, GameNavEvent)] = [
+            (.middleTip, .up),
+            (.middleKnuckle, .down),
+            (.indexIntermediateTip, .right),
+            (.ringIntermediateTip, .left),
+            (.middleIntermediateTip, .confirm)
+        ]
 
-        // Simulate a pinch that would normally trigger .up
-        model.leftPinchSummaries[.middleTip] = PinchSummary(quantizedValue: 20, isPinched: true, rawDistance: 0.01)
-        model.checkGestureNavigation()
-
-        XCTAssertNil(model.latestNavEvent, "No nav event should fire when game is playing")
+        for (gesture, expectedEvent) in mappings {
+            let router = GestureNavigationRouter()
+            let snapshot = GameGestureSnapshot(
+                leftClassification: .none,
+                rightClassification: .detected(gesture, confidence: 0.9),
+                leftResults: [:],
+                rightResults: [:],
+                timestamp: 1.0
+            )
+            router.process(snapshot: snapshot, selectedChirality: .right)
+            XCTAssertEqual(router.latestEvent, expectedEvent,
+                           "\(gesture.displayName) should map to \(expectedEvent)")
+        }
     }
 
-    /// When isGamePlaying is false, checkGestureNavigation should emit events.
+    /// When no gesture is detected, no nav event should fire.
     @MainActor
-    func testNavEvent_emittedWhenGameNotPlaying() {
-        let model = HandViewModel()
-        model.isGamePlaying = false
+    func testNavEvent_noGesture_noEvent() {
+        let router = GestureNavigationRouter()
+        let snapshot = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .none,
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot, selectedChirality: .right)
+        XCTAssertNil(router.latestEvent, "No nav event should fire when no gesture detected")
+    }
 
-        model.leftPinchSummaries[.middleTip] = PinchSummary(quantizedValue: 20, isPinched: true, rawDistance: 0.01)
-        model.checkGestureNavigation()
+    /// Debounce: same gesture within interval should not fire again
+    @MainActor
+    func testNavEvent_debounce() {
+        let router = GestureNavigationRouter()
+        router.debounceInterval = 0.5
 
-        XCTAssertNotNil(model.latestNavEvent, "Nav event should fire when game is not playing")
+        let snapshot1 = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot1, selectedChirality: .right)
+        XCTAssertEqual(router.latestEvent, .up)
+
+        // Consume the event
+        router.consumeEvent()
+        XCTAssertNil(router.latestEvent)
+
+        // Same gesture shortly after — should be debounced
+        let snapshot2 = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.2  // only 0.2s later
+        )
+        router.process(snapshot: snapshot2, selectedChirality: .right)
+        XCTAssertNil(router.latestEvent, "Should be debounced within interval")
+    }
+
+    /// Event should not be overwritten if not consumed
+    @MainActor
+    func testNavEvent_notOverwritten() {
+        let router = GestureNavigationRouter()
+
+        let snapshot1 = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot1, selectedChirality: .right)
+        XCTAssertEqual(router.latestEvent, .up)
+
+        // Different gesture — should NOT overwrite unconsumed event
+        let snapshot2 = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleKnuckle, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 2.0
+        )
+        router.process(snapshot: snapshot2, selectedChirality: .right)
+        XCTAssertEqual(router.latestEvent, .up, "Should still be .up since not consumed")
+    }
+
+    /// consumeEvent clears the event
+    @MainActor
+    func testConsumeEvent() {
+        let router = GestureNavigationRouter()
+        let snapshot = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot, selectedChirality: .right)
+        XCTAssertNotNil(router.latestEvent)
+        router.consumeEvent()
+        XCTAssertNil(router.latestEvent)
+    }
+
+    /// Left hand chirality should use left classification
+    @MainActor
+    func testNavEvent_leftHandChirality() {
+        let router = GestureNavigationRouter()
+        let snapshot = GameGestureSnapshot(
+            leftClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .none,
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot, selectedChirality: .left)
+        XCTAssertEqual(router.latestEvent, .up)
+    }
+
+    /// activeNavGesture should track the current nav gesture
+    @MainActor
+    func testActiveNavGesture() {
+        let router = GestureNavigationRouter()
+        let snapshot = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.middleTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot, selectedChirality: .right)
+        XCTAssertEqual(router.activeNavGesture, .middleTip)
+    }
+
+    /// Non-nav gesture should not set activeNavGesture
+    @MainActor
+    func testActiveNavGesture_nonNavGesture() {
+        let router = GestureNavigationRouter()
+        let snapshot = GameGestureSnapshot(
+            leftClassification: .none,
+            rightClassification: .detected(.indexTip, confidence: 0.9),
+            leftResults: [:],
+            rightResults: [:],
+            timestamp: 1.0
+        )
+        router.process(snapshot: snapshot, selectedChirality: .right)
+        XCTAssertNil(router.activeNavGesture, "indexTip is not a nav gesture")
     }
 }
 
@@ -353,54 +452,31 @@ final class GestureNavigationTests: XCTestCase {
 
 final class FlushDataTests: XCTestCase {
 
-    /// flushPinchDataToUI should copy pending buffers to observable properties.
+    /// Quantize summaries should produce correct 5% step values.
     @MainActor
-    func testFlush_copiesPendingToObservable() {
+    func testQuantizeSummaries() {
         let model = HandViewModel()
+        let results: [ThumbPinchGesture: PinchResult] = [
+            .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.75, rawDistance: 0.01,
+                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0),
+            .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.5, rawDistance: 0.03,
+                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
 
-        // Simulate ECS thread writing to pending buffers
-        model.pendingLeftSummaries[.indexTip] = PinchSummary(quantizedValue: 15, isPinched: true, rawDistance: 0.01)
-        model.pendingRightSummaries[.middleTip] = PinchSummary(quantizedValue: 10, isPinched: false, rawDistance: 0.03)
-        model.pendingLeftResults[.indexTip] = PinchResult(gesture: .indexTip, pinchValue: 0.75, rawDistance: 0.01)
-        model.pendingRightResults[.middleTip] = PinchResult(gesture: .middleTip, pinchValue: 0.5, rawDistance: 0.03)
-        model.pendingDirty = true
+        let summaries = model.quantizeSummaries(results)
 
-        // Flush
-        model.flushPinchDataToUI()
-
-        XCTAssertEqual(model.leftPinchSummaries[.indexTip]?.quantizedValue, 15)
-        XCTAssertEqual(model.rightPinchSummaries[.middleTip]?.quantizedValue, 10)
-        XCTAssertEqual(model.leftPinchResults[.indexTip]?.pinchValue, 0.75)
-        XCTAssertEqual(model.rightPinchResults[.middleTip]?.pinchValue, 0.5)
+        XCTAssertEqual(summaries[.indexTip]?.quantizedValue, 15) // 0.75 * 20 = 15
+        XCTAssertEqual(summaries[.middleTip]?.quantizedValue, 10) // 0.5 * 20 = 10
     }
 
-    /// flushPinchDataToUI should not overwrite if not dirty.
+    /// flushPinchDataToUI should not crash when called with no pending data.
     @MainActor
-    func testFlush_noCopyWhenNotDirty() {
+    func testFlush_noCrashWhenEmpty() {
         let model = HandViewModel()
-
-        model.leftPinchSummaries[.indexTip] = PinchSummary(quantizedValue: 5, isPinched: false, rawDistance: 0.04)
-        model.pendingLeftSummaries[.indexTip] = PinchSummary(quantizedValue: 18, isPinched: true, rawDistance: 0.008)
-        model.pendingDirty = false
-
+        // Should not crash
         model.flushPinchDataToUI()
-
-        // Should still have old value since dirty flag was false
-        XCTAssertEqual(model.leftPinchSummaries[.indexTip]?.quantizedValue, 5)
-    }
-
-    /// flushPinchDataToUI should also flush calibration samples.
-    @MainActor
-    func testFlush_calibrationSamples() {
-        let model = HandViewModel()
-
-        model.pendingCalibrationSamples = [0.01, 0.015, 0.012]
-        model.pendingCalibrationDirty = true
-
-        model.flushPinchDataToUI()
-
-        XCTAssertEqual(model.calibrationSamples.count, 3)
-        XCTAssertEqual(model.calibrationSamples, [0.01, 0.015, 0.012])
+        XCTAssertTrue(model.leftPinchSummaries.isEmpty)
+        XCTAssertTrue(model.rightPinchSummaries.isEmpty)
     }
 }
 
@@ -445,12 +521,10 @@ final class GestureConfigTests: XCTestCase {
 
     /// neighborJointNames should include same-finger adjacent joints and cross-finger same-level joints.
     func testNeighborJointNames_includeAdjacentAndCrossFinger() {
-        // indexTip neighbors should include indexIntermediateTip (same finger, adjacent) and middleTip (cross-finger)
         let indexTipNeighbors = ThumbPinchGesture.indexTip.neighborJointNames
         XCTAssertTrue(indexTipNeighbors.contains(.indexFingerIntermediateTip), "indexTip should have indexIntermediateTip neighbor")
         XCTAssertTrue(indexTipNeighbors.contains(.middleFingerTip), "indexTip should have middleTip neighbor")
 
-        // middleIntermediateTip neighbors should include middleTip, middleKnuckle, indexIntermediateTip, ringIntermediateTip
         let midIntNeighbors = ThumbPinchGesture.middleIntermediateTip.neighborJointNames
         XCTAssertTrue(midIntNeighbors.contains(.middleFingerTip), "middleIntermediateTip should have middleTip")
         XCTAssertTrue(midIntNeighbors.contains(.middleFingerKnuckle), "middleIntermediateTip should have middleKnuckle")
@@ -477,7 +551,6 @@ final class CalibrationSampleTests: XCTestCase {
 
     func testStdDev() {
         let sample = CalibrationSample(gestureRawValue: 0, samples: [0.01, 0.02, 0.03])
-        // stddev of [0.01, 0.02, 0.03] with sample correction = sqrt(0.0001/2) = 0.01
         XCTAssertEqual(sample.stdDev, 0.01, accuracy: 0.001)
     }
 
@@ -500,10 +573,8 @@ final class CalibrationSampleTests: XCTestCase {
                                        samples: [0.01, 0.012, 0.011, 0.013, 0.009])
         let config = sample.derivedPinchConfig()
 
-        // Derived min should be less than mean, max should be greater
         XCTAssertLessThan(config.minDistance, sample.mean)
         XCTAssertGreaterThan(config.maxDistance, sample.mean)
-        // Should be within reasonable bounds
         XCTAssertGreaterThan(config.minDistance, 0)
         XCTAssertGreaterThan(config.maxDistance, config.minDistance)
     }
@@ -521,23 +592,18 @@ final class CalibrationSampleTests: XCTestCase {
 
 final class MLTrainerStateTests: XCTestCase {
 
-    /// On visionOS, training should immediately return .skippedRuleBased (not stuck at .preparing).
+    /// On visionOS, training should immediately return .skippedRuleBased.
     @MainActor
     func testFallbackTrainer_reportsUnavailable() async {
         let trainer = GestureMLTrainer()
         XCTAssertEqual(trainer.state, .idle)
 
-        // Create a minimal profile
         let profile = CalibrationProfile(name: "test", samples: [])
         let result = await trainer.train(profile: profile)
 
         XCTAssertNil(result, "No model URL should be returned on visionOS")
-
-        // State should be .skippedRuleBased (not stuck at .preparing or .idle)
         XCTAssertEqual(trainer.state, .skippedRuleBased,
                        "visionOS trainer should return .skippedRuleBased")
-        XCTAssertNotEqual(trainer.state, .preparing, "Should NOT be stuck at preparing")
-        XCTAssertNotEqual(trainer.state, .idle, "Should have transitioned from idle")
     }
 }
 
@@ -590,26 +656,266 @@ final class GameStateTests: XCTestCase {
         let model = HandViewModel()
         XCTAssertFalse(model.isGamePlaying)
     }
+}
 
-    /// Setting isGamePlaying to true should suppress navigation.
+// MARK: - GameSessionManager Tests
+
+final class GameSessionManagerTests: XCTestCase {
+
+    /// appFlowState defaults to .calibrationPrompt
     @MainActor
-    func testIsGamePlaying_suppressesNavigation() {
-        let model = HandViewModel()
+    func testAppFlowState_defaultsCalibrationPrompt() {
+        let session = GameSessionManager()
+        XCTAssertEqual(session.appFlowState, .calibrationPrompt)
+    }
 
-        // First, verify nav works when not playing
-        model.leftPinchSummaries[.middleTip] = PinchSummary(quantizedValue: 20, isPinched: true, rawDistance: 0.01)
-        model.checkGestureNavigation()
-        XCTAssertNotNil(model.latestNavEvent)
+    /// selectedChirality defaults to .right
+    @MainActor
+    func testSelectedChirality_defaultsRight() {
+        let session = GameSessionManager()
+        XCTAssertEqual(session.selectedChirality, .right)
+    }
 
-        // Reset
-        model.latestNavEvent = nil
-        model.leftPinchSummaries = [:]
+    /// confirmHand sets chirality and advances to gameLobby
+    @MainActor
+    func testConfirmHand() {
+        let session = GameSessionManager()
+        session.confirmHand(.left)
+        XCTAssertEqual(session.selectedChirality, .left)
+        XCTAssertEqual(session.appFlowState, .gameLobby)
+    }
 
-        // Now set game playing and try again
-        model.isGamePlaying = true
-        model.leftPinchSummaries[.middleKnuckle] = PinchSummary(quantizedValue: 20, isPinched: true, rawDistance: 0.01)
-        model.checkGestureNavigation()
-        XCTAssertNil(model.latestNavEvent, "Navigation should be suppressed when game is playing")
+    /// selectGame advances to playing
+    @MainActor
+    func testSelectGame() {
+        let session = GameSessionManager()
+        session.confirmHand(.right)
+        session.selectGame(.gestureTest)
+        XCTAssertEqual(session.appFlowState, .playing(.gestureTest))
+        XCTAssertTrue(session.isGamePlaying)
+    }
+
+    /// exitToLobby returns to gameLobby
+    @MainActor
+    func testExitToLobby() {
+        let session = GameSessionManager()
+        session.confirmHand(.right)
+        session.selectGame(.gestureTest)
+        session.exitToLobby()
+        XCTAssertEqual(session.appFlowState, .gameLobby)
+        XCTAssertFalse(session.isGamePlaying)
+    }
+
+    /// exitToHandSelection returns to handSelection
+    @MainActor
+    func testExitToHandSelection() {
+        let session = GameSessionManager()
+        session.confirmHand(.right)
+        session.exitToHandSelection()
+        XCTAssertEqual(session.appFlowState, .handSelection)
+    }
+
+    /// Full flow: calibrationPrompt → handSelection → gameLobby → playing → gameLobby → handSelection
+    @MainActor
+    func testFullFlowCycle() {
+        let session = GameSessionManager()
+
+        // Start at calibrationPrompt
+        XCTAssertEqual(session.appFlowState, .calibrationPrompt)
+
+        // Skip calibration → handSelection
+        session.skipCalibration()
+        XCTAssertEqual(session.appFlowState, .handSelection)
+
+        // Select right hand → gameLobby
+        session.confirmHand(.right)
+        XCTAssertEqual(session.appFlowState, .gameLobby)
+        XCTAssertEqual(session.selectedChirality, .right)
+
+        // Select game → playing
+        session.selectGame(.gestureTest)
+        XCTAssertEqual(session.appFlowState, .playing(.gestureTest))
+
+        // Exit game → gameLobby
+        session.exitToLobby()
+        XCTAssertEqual(session.appFlowState, .gameLobby)
+
+        // Back → handSelection
+        session.exitToHandSelection()
+        XCTAssertEqual(session.appFlowState, .handSelection)
+    }
+
+    /// selectedChirality syncs to gestureEngine
+    @MainActor
+    func testChiralitySyncsToEngine() {
+        let session = GameSessionManager()
+        session.selectedChirality = .left
+        XCTAssertEqual(session.gestureEngine.selectedChirality, .left)
+        session.selectedChirality = .right
+        XCTAssertEqual(session.gestureEngine.selectedChirality, .right)
+    }
+
+    /// GameType.isAvailable returns true for first 3 games
+    @MainActor
+    func testGameTypeAvailability() {
+        XCTAssertTrue(GameType.gestureTest.isAvailable)
+        XCTAssertTrue(GameType.fusionDetection.isAvailable)
+        XCTAssertTrue(GameType.pureML.isAvailable)
+        XCTAssertFalse(GameType.rhythmGame.isAvailable)
+        XCTAssertFalse(GameType.arcadeGame.isAvailable)
+    }
+
+    /// selectGame with unavailable game should not change state
+    @MainActor
+    func testSelectUnavailableGame() {
+        let session = GameSessionManager()
+        session.confirmHand(.right)
+        session.selectGame(.rhythmGame)
+        XCTAssertEqual(session.appFlowState, .gameLobby, "Should stay in lobby for unavailable game")
+    }
+}
+
+// MARK: - GestureClassifier Tests
+
+final class GestureClassifierTests: XCTestCase {
+
+    /// Rule-only: high pinch value should be detected
+    @MainActor
+    func testClassifyByRuleOnly_highPinch() {
+        let classifier = GestureClassifier()
+        let results: [ThumbPinchGesture: PinchResult] = [
+            .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.9, rawDistance: 0.01,
+                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0),
+            .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.3, rawDistance: 0.04,
+                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
+
+        let result = classifier.classify(results: results, chirality: .right, hasCalibration: false, hasML: false)
+        XCTAssertEqual(result.gesture, .indexTip)
+        XCTAssertGreaterThan(result.confidence, 0.75)
+    }
+
+    /// Rule-only: low pinch values should return .none
+    @MainActor
+    func testClassifyByRuleOnly_lowPinch() {
+        let classifier = GestureClassifier()
+        let results: [ThumbPinchGesture: PinchResult] = [
+            .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.3, rawDistance: 0.04,
+                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
+
+        let result = classifier.classify(results: results, chirality: .right, hasCalibration: false, hasML: false)
+        XCTAssertEqual(result.gesture, nil)
+    }
+
+    /// Temporal smoothing: needs 2/3 agreement
+    @MainActor
+    func testTemporalSmoothing() {
+        let classifier = GestureClassifier()
+        let highIndex: [ThumbPinchGesture: PinchResult] = [
+            .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.9, rawDistance: 0.01,
+                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
+        let highMiddle: [ThumbPinchGesture: PinchResult] = [
+            .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.9, rawDistance: 0.01,
+                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
+
+        // Frame 1: indexTip
+        let r1 = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        // First frame — not enough history, may return the gesture
+        _ = r1
+
+        // Frame 2: indexTip again
+        let r2 = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        XCTAssertEqual(r2.gesture, .indexTip, "2/2 frames agree on indexTip")
+
+        // Frame 3: middleTip — now 2/3 are indexTip, 1/3 middleTip
+        let r3 = classifier.classify(results: highMiddle, chirality: .right, hasCalibration: false, hasML: false)
+        // indexTip appeared 2 times in last 3 frames, middleTip 1 time
+        XCTAssertEqual(r3.gesture, .indexTip, "Majority vote should still be indexTip")
+    }
+
+    /// Empty results should return .none
+    @MainActor
+    func testClassify_emptyResults() {
+        let classifier = GestureClassifier()
+        let result = classifier.classify(results: [:], chirality: .right, hasCalibration: false, hasML: false)
+        XCTAssertNil(result.gesture)
+    }
+
+    /// Per-hand independent smoothing
+    @MainActor
+    func testPerHandSmoothing() {
+        let classifier = GestureClassifier()
+        let highIndex: [ThumbPinchGesture: PinchResult] = [
+            .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.9, rawDistance: 0.01,
+                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
+        let highMiddle: [ThumbPinchGesture: PinchResult] = [
+            .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.9, rawDistance: 0.01,
+                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+        ]
+
+        // Right hand: 2 frames of indexTip
+        _ = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        let rightResult = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        XCTAssertEqual(rightResult.gesture, .indexTip)
+
+        // Left hand: 2 frames of middleTip (independent buffer)
+        _ = classifier.classify(results: highMiddle, chirality: .left, hasCalibration: false, hasML: false)
+        let leftResult = classifier.classify(results: highMiddle, chirality: .left, hasCalibration: false, hasML: false)
+        XCTAssertEqual(leftResult.gesture, .middleTip)
+    }
+}
+
+// MARK: - GameGestureEngine Tests
+
+final class GameGestureEngineTests: XCTestCase {
+
+    /// Engine starts with empty snapshot
+    @MainActor
+    func testInitialState() {
+        let engine = GameGestureEngine()
+        XCTAssertNil(engine.activeGesture.gesture)
+        XCTAssertEqual(engine.selectedChirality, .right)
+    }
+
+    /// selectedChirality affects activeGesture
+    @MainActor
+    func testActiveGesture_respectsChirality() {
+        let engine = GameGestureEngine()
+        engine.selectedChirality = .left
+        // With empty snapshot, activeGesture should be .none
+        XCTAssertNil(engine.activeGesture.gesture)
+    }
+
+    /// flush without binding returns false
+    @MainActor
+    func testFlush_withoutBinding() {
+        let engine = GameGestureEngine()
+        let result = engine.flush()
+        XCTAssertFalse(result)
+    }
+}
+
+// MARK: - GameNavEvent Tests
+
+final class GameNavEventTests: XCTestCase {
+
+    /// All 5 nav events are distinct
+    @MainActor
+    func testAllEventsDistinct() {
+        let events: [GameNavEvent] = [.up, .down, .left, .right, .confirm]
+        let unique = Set(events)
+        XCTAssertEqual(unique.count, 5)
+    }
+
+    /// GameNavEvent is Equatable
+    @MainActor
+    func testEquatable() {
+        XCTAssertEqual(GameNavEvent.up, GameNavEvent.up)
+        XCTAssertNotEqual(GameNavEvent.up, GameNavEvent.down)
     }
 }
 
@@ -617,34 +923,28 @@ final class GameStateTests: XCTestCase {
 
 final class IntegrationTests: XCTestCase {
 
-    /// Test the complete pipeline: set hand data → detect → flush → check summaries.
+    /// Test the complete pipeline: detect → quantize → verify summaries.
     @MainActor
-    func testFullPipeline_detectAndFlush() {
+    func testFullPipeline_detectAndQuantize() {
         let model = HandViewModel()
 
-        // Create a hand pinching indexTip
         guard let hand = MockHandFactory.makeHandPinching(to: .indexFingerTip, distance: 0.005) else {
             XCTFail("Failed to create mock hand")
             return
         }
 
-        // Run detection directly (simulating ECS thread)
         let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
         let summaries = model.quantizeSummaries(results)
 
-        // Simulate writing to pending buffers
-        model.pendingRightSummaries = summaries
-        model.pendingRightResults = results
-        model.pendingDirty = true
+        // indexTip should have high quantized value
+        let indexSummary = summaries[.indexTip]
+        XCTAssertNotNil(indexSummary)
+        XCTAssertGreaterThan(indexSummary!.quantizedValue, 14, "indexTip should have high quantized value when pinching")
 
-        // Flush to observable
-        model.flushPinchDataToUI()
-
-        // Verify
-        XCTAssertTrue(model.rightPinchSummaries[.indexTip]?.isPinched == true,
-                       "indexTip should be pinched after full pipeline")
-        XCTAssertFalse(model.rightPinchSummaries[.middleTip]?.isPinched == true,
-                        "middleTip should NOT be pinched when only indexTip is close")
+        // middleTip should have low quantized value
+        let middleSummary = summaries[.middleTip]
+        XCTAssertNotNil(middleSummary)
+        XCTAssertLessThan(middleSummary!.quantizedValue, 10, "middleTip should have low value when only indexTip is pinching")
     }
 
     /// Test disambiguation: when pinching indexTip, indexTip should score higher than indexIntermediateTip.
@@ -659,8 +959,8 @@ final class IntegrationTests: XCTestCase {
 
         let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
 
-        let indexTipScore = results[.indexTip]?.combinedScore ?? 0
-        let indexIntScore = results[.indexIntermediateTip]?.combinedScore ?? 0
+        let indexTipScore = results[.indexTip]?.pinchValue ?? 0
+        let indexIntScore = results[.indexIntermediateTip]?.pinchValue ?? 0
 
         XCTAssertGreaterThan(indexTipScore, indexIntScore,
                              "Target gesture should score higher than neighbor gesture")

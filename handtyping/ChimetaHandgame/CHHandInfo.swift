@@ -29,7 +29,11 @@ public struct CHHandInfo: Sendable, Equatable {
     }
     
     public static var builtinHandInfo: [String : CHHandInfo] = {
-        let dict = CHHandJsonModel.loadHandJsonModelDict(fileName: "BuiltinHand", bundle: handAssetsBundle)!.reduce(into: [String: CHHandInfo](), {
+        guard let loaded = CHHandJsonModel.loadHandJsonModelDict(fileName: "BuiltinHand", bundle: handAssetsBundle) else {
+            print("[CHHandInfo] Warning: Failed to load BuiltinHand.json — using empty dictionary")
+            return [:]
+        }
+        let dict = loaded.reduce(into: [String: CHHandInfo](), {
             $0[$1.key] = $1.value.convertToCHHandInfo()
         })
         return dict

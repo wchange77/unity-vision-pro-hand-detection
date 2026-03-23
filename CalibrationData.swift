@@ -176,9 +176,11 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
 
     static func delete(id: UUID) {
         let url = profilesDirectory.appendingPathComponent("\(id.uuidString).json")
+        // Read profile BEFORE deleting to get ML model URL
+        let profile = load(id: id)
         try? FileManager.default.removeItem(at: url)
-        // Also delete associated ML model
-        if let profile = load(id: id), let mlURL = profile.mlModelURL {
+        // Delete associated ML model if present
+        if let mlURL = profile?.mlModelURL {
             try? FileManager.default.removeItem(at: mlURL)
         }
         if loadActiveProfileId() == id {
@@ -186,9 +188,13 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
         }
     }
 
-    /// 检查是否有任何已保存的校准配置
+    /// 检查是否有任何已保存的校准配置（轻量检查，不解码文件）
     static func hasAnyProfile() -> Bool {
-        !listAll().isEmpty
+        let dir = profilesDirectory
+        guard let files = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
+            return false
+        }
+        return files.contains { $0.pathExtension == "json" }
     }
 
     // MARK: - 活跃配置

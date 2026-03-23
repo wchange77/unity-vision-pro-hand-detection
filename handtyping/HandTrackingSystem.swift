@@ -9,6 +9,7 @@
 import RealityKit
 import ARKit
 import QuartzCore
+import os
 
 // MARK: - Lightweight performance timer with UI-readable stats
 
@@ -22,36 +23,50 @@ struct PerfSnapshot: Equatable {
     static let zero = PerfSnapshot(name: "", avgMs: 0, maxMs: 0, callsPerSec: 0)
 }
 
-final class PerfTimer {
+/// Thread-safe performance timer. Uses os_unfair_lock to protect mutable state
+/// since it is written from the ECS thread and read from the main thread.
+final class PerfTimer: @unchecked Sendable {
     let name: String
-    private var samples: [Double] = []
-    private var lastReportTime: Double = 0
-    private static let reportInterval: Double = 1.0 // seconds
+    private let _lock = OSAllocatedUnfairLock(initialState: State())
+    private let reportInterval: Double = 1.0
 
-    /// Latest snapshot for UI reading (updated every ~1s)
-    private(set) var latestSnapshot: PerfSnapshot
+    private struct State {
+        var samples: [Double] = []
+        var lastReportTime: Double = CACurrentMediaTime()
+        var latestSnapshot: PerfSnapshot
+        init() {
+            latestSnapshot = PerfSnapshot(name: "", avgMs: 0, maxMs: 0, callsPerSec: 0)
+        }
+    }
+
+    /// Latest snapshot for UI reading (thread-safe)
+    var latestSnapshot: PerfSnapshot {
+        _lock.withLock { $0.latestSnapshot }
+    }
 
     init(_ name: String) {
         self.name = name
-        self.lastReportTime = CACurrentMediaTime()
-        self.latestSnapshot = PerfSnapshot(name: name, avgMs: 0, maxMs: 0, callsPerSec: 0)
+        _lock.withLock { $0.latestSnapshot = PerfSnapshot(name: name, avgMs: 0, maxMs: 0, callsPerSec: 0) }
     }
 
     func record(_ duration: Double) {
-        samples.append(duration)
-        let now = CACurrentMediaTime()
-        if now - lastReportTime >= Self.reportInterval {
-            let avg = samples.reduce(0, +) / Double(samples.count)
-            let maxVal = samples.max() ?? 0
-            let count = samples.count
-            latestSnapshot = PerfSnapshot(
-                name: name,
-                avgMs: avg * 1000,
-                maxMs: maxVal * 1000,
-                callsPerSec: count
-            )
-            samples.removeAll(keepingCapacity: true)
-            lastReportTime = now
+        let interval = reportInterval
+        _lock.withLock { state in
+            state.samples.append(duration)
+            let now = CACurrentMediaTime()
+            if now - state.lastReportTime >= interval {
+                let avg = state.samples.reduce(0, +) / Double(state.samples.count)
+                let maxVal = state.samples.max() ?? 0
+                let count = state.samples.count
+                state.latestSnapshot = PerfSnapshot(
+                    name: self.name,
+                    avgMs: avg * 1000,
+                    maxMs: maxVal * 1000,
+                    callsPerSec: count
+                )
+                state.samples.removeAll(keepingCapacity: true)
+                state.lastReportTime = now
+            }
         }
     }
 }
@@ -80,8 +95,9 @@ struct HandTrackingSystem: System {
 
     /// Frame counter for throttling gesture detection
     private var frameCount: Int = 0
-    /// Detection interval: run gesture detection every N frames (~12Hz at 90fps)
-    private static let detectionInterval = 8
+    /// 检测间隔：每2帧运行一次（90fps → 45Hz检测频率）
+    /// 配合 GestureClassifier 的2帧平滑窗口，手势确认延迟 = 44ms
+    private static let detectionInterval = 2
     /// Refresh perf UI every ~1s (90 frames at 90fps)
     private static let perfUIInterval = 90
 
@@ -111,9 +127,10 @@ struct HandTrackingSystem: System {
         Self.lastFrameTime = t0
 
         guard let viewModel = HandTrackingSystem.shared else { return }
+
         let manager = viewModel.latestHandTracking
 
-        // Update entity transforms
+        // 始终更新骨架 transform（不论是否在游戏中）
         let tTransStart = CACurrentMediaTime()
         if let leftInfo = manager.leftHandInfo {
             manager.updateEntityTransforms(chirality: .left, handInfo: leftInfo)
@@ -123,11 +140,17 @@ struct HandTrackingSystem: System {
         }
         Self.timerTransforms.record(CACurrentMediaTime() - tTransStart)
 
-        // Throttled: gesture detection + UI update (~12Hz)
+        // Throttled: gesture detection (~30Hz)
         if frameCount % Self.detectionInterval == 0 {
             let tDetect = CACurrentMediaTime()
             viewModel.detectAllPinchGestures()
             Self.timerPinchDetect.record(CACurrentMediaTime() - tDetect)
+        }
+
+        // 游戏进行时跳过可视化和性能统计
+        if viewModel.isGamePlaying {
+            Self.timerECSTotal.record(CACurrentMediaTime() - t0)
+            return
         }
 
         // Visualization update (only when skeleton visible, every other frame)
@@ -155,7 +178,9 @@ struct HandTrackingSystem: System {
     }
 
     // MARK: - Shared reference to view model (set by ImmersiveView)
-    @MainActor static var shared: HandViewModel?
+    /// nonisolated(unsafe) because this is set once from main thread and read from ECS thread.
+    /// The ECS system only starts after this is set, so there is no true race.
+    nonisolated(unsafe) static var shared: HandViewModel?
 
     /// Recursively count all entities in the hierarchy
     private static func countEntities(_ entity: Entity) -> Int {

@@ -36,6 +36,9 @@ struct CalibrationView: View {
     @Environment(HandViewModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
+    /// 校准完成后的回调（嵌入模式时使用）
+    var onComplete: (() -> Void)?
+
     @State private var state: CalibrationState = .welcome
     @State private var gestureStatuses: [ThumbPinchGesture: GestureCalibrationStatus] = {
         var dict: [ThumbPinchGesture: GestureCalibrationStatus] = [:]
@@ -52,6 +55,7 @@ struct CalibrationView: View {
     @State private var initialCountdownStartTime: TimeInterval = 0
     @State private var showInitialCountdown: Bool = false
 
+    @State private var autoReturnStartTime: TimeInterval = 0
     @State private var profileName: String = ""
     @State private var savedProfiles: [CalibrationProfile] = []
 
@@ -59,6 +63,7 @@ struct CalibrationView: View {
     private let preparationDuration: TimeInterval = 3.0
     private let initialCountdownDuration: TimeInterval = 5.0
     private let minSampleCount: Int = 15
+    private let autoReturnDelay: TimeInterval = 3.0
 
     /// Core gestures (minimum set for viable calibration)
     static let coreGestures: Set<ThumbPinchGesture> = [
@@ -72,18 +77,17 @@ struct CalibrationView: View {
     var allCompleted: Bool {
         completedCount == 12
     }
-    
+
     var currentGesture: ThumbPinchGesture? {
         guard currentGestureIndex < ThumbPinchGesture.allCases.count else { return nil }
         return ThumbPinchGesture.allCases[currentGestureIndex]
     }
 
     var body: some View {
-        @Bindable var model = model
         TimelineView(.periodic(from: .now, by: 0.033)) { context in
             VStack(spacing: 0) {
                 headerBar
-                Divider().overlay(CyberpunkTheme.neonCyan.opacity(0.3))
+                Divider().overlay(DesignTokens.Colors.accentBlue.opacity(0.3))
 
                 switch state {
                 case .welcome:
@@ -102,13 +106,31 @@ struct CalibrationView: View {
                 model.flushPinchDataToUI()
                 if state == .recording {
                     checkRecordingProgress()
+                } else if state == .complete, autoReturnStartTime > 0 {
+                    // 校准完成后自动返回
+                    let elapsed = CACurrentMediaTime() - autoReturnStartTime
+                    if elapsed >= autoReturnDelay {
+                        autoReturnStartTime = 0  // 防止重复触发
+                        if let onComplete {
+                            onComplete()
+                        } else {
+                            dismiss()
+                        }
+                    }
                 }
             }
         }
         .frame(minWidth: 700, minHeight: 500)
-        .background(CyberpunkTheme.darkBg.opacity(0.6))
+        .animation(DesignTokens.Animation.standard, value: state)
         .onAppear {
             savedProfiles = CalibrationProfile.listAll()
+            // 自动开始校准（跳过 welcome 页面）
+            if state == .welcome && model.turnOnImmersiveSpace {
+                showInitialCountdown = true
+                initialCountdownStartTime = CACurrentMediaTime()
+                currentGestureIndex = 0
+                state = .recording
+            }
         }
         .onDisappear {
             if state == .recording {
@@ -121,18 +143,16 @@ struct CalibrationView: View {
         HStack {
             Text("// 快速校准")
                 .font(.system(size: 16, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonCyan)
+                .foregroundColor(DesignTokens.Colors.accentBlue)
+                .holographic(speed: 4.0)
 
             if state == .recording {
                 Text("\(completedCount)/12")
                     .font(.system(size: 14, weight: .bold, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(CyberpunkTheme.neonGreen.opacity(0.1))
-                    )
+                    .glassMaterial(tint: DesignTokens.Colors.success, cornerRadius: 4)
             }
 
             Spacer()
@@ -143,13 +163,13 @@ struct CalibrationView: View {
                     state = .welcome
                     resetCalibration()
                 }
-                .buttonStyle(CyberpunkButtonStyle(color: .red))
+                .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.error))
 
                 if allCompleted {
                     Button("完成 >>") {
                         finishCalibration()
                     }
-                    .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonGreen))
+                    .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.success))
                 }
             }
 
@@ -160,31 +180,35 @@ struct CalibrationView: View {
                 state = .profileList
                 savedProfiles = CalibrationProfile.listAll()
             }
-            .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonCyan))
+            .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.accentBlue))
 
             Button("关闭") {
-                dismiss()
+                if let onComplete {
+                    onComplete()
+                } else {
+                    dismiss()
+                }
             }
             .buttonStyle(CyberpunkButtonStyle(color: .gray))
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, DesignTokens.Spacing.md)
         .padding(.vertical, 10)
     }
 
     // MARK: - Welcome View
 
     private var welcomeView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: DesignTokens.Spacing.lg) {
             Spacer()
 
             Image(systemName: "hand.raised.fingers.spread")
                 .font(.system(size: 60))
-                .foregroundColor(CyberpunkTheme.neonCyan.opacity(0.6))
-                .neonGlow(color: CyberpunkTheme.neonCyan, radius: 10)
+                .foregroundColor(DesignTokens.Colors.accentBlue.opacity(0.6))
+                .neonGlow(color: DesignTokens.Colors.accentBlue, radius: 10)
 
             Text("规则校准 - 收集参考数据")
                 .font(.system(size: 24, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonCyan)
+                .foregroundColor(DesignTokens.Colors.accentBlue)
 
             Text("为每个手势收集距离和姿态参考数据\n运行时将结合ML模型进行融合检测")
                 .font(.system(size: 14, design: .monospaced))
@@ -198,28 +222,12 @@ struct CalibrationView: View {
                 infoRow("4", "完成全部12个手势")
             }
             .padding()
-            .background(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(CyberpunkTheme.neonCyan.opacity(0.2), lineWidth: 0.5)
-                    .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.02)))
-            )
+            .spatialGlass(cornerRadius: DesignTokens.Spacing.CornerRadius.small)
 
             if !model.turnOnImmersiveSpace {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(CyberpunkTheme.neonYellow)
-                    Text("等待手部追踪启动...")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonYellow)
-                }
+                warningBadge(icon: "exclamationmark.triangle", text: "等待手部追踪启动...")
             } else if !model.mlTrainer.isModelLoaded {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundColor(CyberpunkTheme.neonYellow)
-                    Text("ML 模型未加载，请确保 HandGesture.mlmodelc 已内置")
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonYellow)
-                }
+                warningBadge(icon: "exclamationmark.triangle", text: "ML 模型未加载，请确保 HandGesture.mlmodelc 已内置")
             } else {
                 Button(action: {
                     showInitialCountdown = true
@@ -229,10 +237,11 @@ struct CalibrationView: View {
                 }) {
                     Text("开始校准 >>")
                         .font(.system(size: 16, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonGreen)
-                        .neonGlow(color: CyberpunkTheme.neonGreen, radius: 6)
+                        .foregroundColor(DesignTokens.Colors.success)
+                        .neonGlow(color: DesignTokens.Colors.success, radius: 6)
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("开始校准")
             }
 
             Spacer()
@@ -240,11 +249,22 @@ struct CalibrationView: View {
         .padding()
     }
 
+    private func warningBadge(icon: String, text: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .foregroundColor(DesignTokens.Colors.warning)
+            Text(text)
+                .font(DesignTokens.Typography.mono)
+                .foregroundColor(DesignTokens.Colors.warning)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
     private func infoRow(_ number: String, _ text: String) -> some View {
         HStack(alignment: .top, spacing: 8) {
             Text(number)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonMagenta)
+                .foregroundColor(DesignTokens.Colors.accentPink)
                 .frame(width: 16)
             Text(text)
                 .font(.system(size: 12, design: .monospaced))
@@ -258,95 +278,68 @@ struct CalibrationView: View {
         VStack(spacing: 30) {
             Text("手势校准 \(completedCount)/12")
                 .font(.system(size: 20, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonCyan)
+                .foregroundColor(DesignTokens.Colors.accentBlue)
 
             if let gesture = currentGesture {
                 VStack(spacing: 20) {
                     Text("请做以下手势：")
                         .font(.system(size: 16, design: .monospaced))
                         .foregroundColor(.gray)
-                    
+
                     Text(gesture.displayName)
                         .font(.system(size: 32, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.fingerColor(for: gesture.fingerGroup))
-                        .neonGlow(color: CyberpunkTheme.fingerColor(for: gesture.fingerGroup), radius: 8)
+                        .foregroundColor(DesignTokens.Colors.finger(for: gesture.fingerGroup))
+                        .neonGlow(color: DesignTokens.Colors.finger(for: gesture.fingerGroup), radius: 8)
 
             if showInitialCountdown {
                 let elapsed = CACurrentMediaTime() - initialCountdownStartTime
                 let remaining = max(0, initialCountdownDuration - elapsed)
                 let countdown = Int(ceil(remaining))
-                
-                VStack(spacing: 12) {
-                    Text("准备开始校准")
-                        .font(.system(size: 20, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonCyan)
-                    
-                    Text("\(countdown)")
-                        .font(.system(size: 60, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonCyan)
-                }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(CyberpunkTheme.neonCyan.opacity(0.1))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(CyberpunkTheme.neonCyan.opacity(0.4), lineWidth: 2)
-                        )
+
+                countdownCard(
+                    title: "准备开始校准",
+                    countdown: "\(countdown)",
+                    color: DesignTokens.Colors.accentBlue
                 )
             } else if isInPreparation {
                 let elapsed = CACurrentMediaTime() - preparationStartTime
                 let remaining = max(0, preparationDuration - elapsed)
                 let countdown = Int(ceil(remaining))
-                
-                VStack(spacing: 12) {
-                    Text("准备...")
-                        .font(.system(size: 18, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonYellow)
-                    
-                    Text("\(countdown)")
-                        .font(.system(size: 48, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.neonYellow)
-                }
-                .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(CyberpunkTheme.neonYellow.opacity(0.1))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(CyberpunkTheme.neonYellow.opacity(0.4), lineWidth: 2)
-                        )
+
+                countdownCard(
+                    title: "准备...",
+                    countdown: "\(countdown)",
+                    color: DesignTokens.Colors.warning
                 )
             } else if let gesture = currentGesture, case .recording(let startTime) = gestureStatuses[gesture] {
                 let elapsed = CACurrentMediaTime() - startTime
                 let remaining = max(0, recordDuration - elapsed)
-                
+
                 VStack(spacing: 12) {
                     Text("录制中...")
                         .font(.system(size: 18, weight: .bold, design: .monospaced))
-                        .foregroundColor(.red)
-                    
+                        .foregroundColor(DesignTokens.Colors.error)
+
                     Text(String(format: "%.1fs", remaining))
                         .font(.system(size: 36, weight: .bold, design: .monospaced))
-                        .foregroundColor(.red)
-                    
+                        .foregroundColor(DesignTokens.Colors.error)
+
                     CalibrationWaveView(
                         samples: model.calibrationSamples,
-                        color: CyberpunkTheme.fingerColor(for: gesture.fingerGroup),
+                        color: DesignTokens.Colors.finger(for: gesture.fingerGroup),
                         thresholdMin: gesture.pinchConfig.minDistance,
                         thresholdMax: gesture.pinchConfig.maxDistance
                     )
                     .frame(height: 100)
                 }
                 .padding()
-                .background(
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(Color.red.opacity(0.1))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(Color.red.opacity(0.4), lineWidth: 2)
-                        )
+                .frostedGlass(
+                    intensity: 0.5,
+                    cornerRadius: DesignTokens.Spacing.CornerRadius.medium,
+                    borderWidth: 2
                 )
+                .neonGlow(color: DesignTokens.Colors.error, radius: 6, intensity: 0.4, animated: true)
+                .accessibilityLabel("录制中，剩余\(String(format: "%.0f", remaining))秒")
             } else if currentGesture != nil {
                 Text("等待检测手势...")
                     .font(.system(size: 16, design: .monospaced))
@@ -356,6 +349,27 @@ struct CalibrationView: View {
             }
         }
         .padding()
+    }
+
+    private func countdownCard(title: String, countdown: String, color: Color) -> some View {
+        VStack(spacing: 12) {
+            Text(title)
+                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+
+            Text(countdown)
+                .font(.system(size: 60, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+                .neonGlow(color: color, radius: 12, intensity: 0.6, animated: false)
+        }
+        .padding()
+        .frostedGlass(
+            intensity: 0.5,
+            cornerRadius: DesignTokens.Spacing.CornerRadius.medium,
+            borderWidth: 2
+        )
+        .neonGlow(color: color, radius: 6, intensity: 0.3, animated: true)
+        .accessibilityLabel("\(title)，\(countdown)秒")
     }
 
     // MARK: - Progress Wheel
@@ -374,10 +388,9 @@ struct CalibrationView: View {
                     let startAngle = Double(index) * segmentAngle - .pi / 2 + gap
                     let endAngle = startAngle + segmentAngle - 2 * gap
 
-                    let color = CyberpunkTheme.fingerColor(for: gesture.fingerGroup)
+                    let color = DesignTokens.Colors.finger(for: gesture.fingerGroup)
                     let status = gestureStatuses[gesture] ?? .pending
 
-                    // Build arc path (thick arc segment)
                     var outerArc = Path()
                     outerArc.addArc(center: center, radius: radius,
                                     startAngle: .radians(startAngle),
@@ -407,7 +420,6 @@ struct CalibrationView: View {
                         context.fill(outerArc, with: .color(color.opacity(0.85)))
                     }
 
-                    // Core gesture indicator (small dot at outer edge)
                     if Self.coreGestures.contains(gesture) {
                         let midAngle = (startAngle + endAngle) / 2
                         let dotRadius: CGFloat = status.isCompleted ? 3 : 2
@@ -423,17 +435,16 @@ struct CalibrationView: View {
                         )
                         context.fill(
                             Path(ellipseIn: dotRect),
-                            with: .color(status.isCompleted ? CyberpunkTheme.neonGreen : color.opacity(0.4))
+                            with: .color(status.isCompleted ? DesignTokens.Colors.success : color.opacity(0.4))
                         )
                     }
                 }
             }
 
-            // Center text
             VStack(spacing: 2) {
                 Text("\(completedCount)")
                     .font(.system(size: 36, weight: .heavy, design: .monospaced))
-                    .foregroundColor(allCompleted ? CyberpunkTheme.neonGreen : CyberpunkTheme.neonCyan)
+                    .foregroundColor(allCompleted ? DesignTokens.Colors.success : DesignTokens.Colors.accentBlue)
                 Text("/ 12")
                     .font(.system(size: 14, design: .monospaced))
                     .foregroundColor(.gray)
@@ -441,24 +452,21 @@ struct CalibrationView: View {
         }
     }
 
-    // MARK: - Real-time Feedback Panel
-
+    // MARK: - Gesture Grid
 
     private var gestureGrid: some View {
         VStack(spacing: 2) {
-            // Column headers
             HStack(spacing: 4) {
                 Text("")
                     .frame(width: 40)
                 ForEach(ThumbPinchGesture.FingerGroup.allCases, id: \.rawValue) { group in
                     Text(group.rawValue)
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(CyberpunkTheme.fingerColor(for: group))
+                        .foregroundColor(DesignTokens.Colors.finger(for: group))
                         .frame(maxWidth: .infinity)
                 }
             }
 
-            // Rows: tip, intermediate, knuckle
             ForEach([
                 ("指尖", ThumbPinchGesture.JointLevel.tip, true),
                 ("中节", ThumbPinchGesture.JointLevel.intermediate, false),
@@ -469,7 +477,7 @@ struct CalibrationView: View {
                         if isCore {
                             Image(systemName: "star.fill")
                                 .font(.system(size: 6))
-                                .foregroundColor(CyberpunkTheme.neonYellow)
+                                .foregroundColor(DesignTokens.Colors.warning)
                         }
                         Text(label)
                             .font(.system(size: 11, design: .monospaced))
@@ -486,14 +494,7 @@ struct CalibrationView: View {
             }
         }
         .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.02))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
-                )
-        )
+        .frostedGlass(cornerRadius: DesignTokens.Spacing.CornerRadius.small)
     }
 
     private func gestureFor(group: ThumbPinchGesture.FingerGroup, level: ThumbPinchGesture.JointLevel) -> ThumbPinchGesture {
@@ -502,7 +503,7 @@ struct CalibrationView: View {
 
     private func gestureCell(gesture: ThumbPinchGesture) -> some View {
         let status = gestureStatuses[gesture] ?? .pending
-        let color = CyberpunkTheme.fingerColor(for: gesture.fingerGroup)
+        let color = DesignTokens.Colors.finger(for: gesture.fingerGroup)
 
         return Button {
             if currentGesture == nil && !status.isCompleted {
@@ -525,16 +526,13 @@ struct CalibrationView: View {
             }
             .padding(.vertical, 6)
             .padding(.horizontal, 8)
-            .background(
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(cellBackground(for: status, color: color))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(cellBorder(for: status, color: color), lineWidth: 0.5)
-                    )
+            .glassMaterial(
+                tint: cellTint(for: status, color: color),
+                cornerRadius: 4
             )
         }
         .buttonStyle(.plain)
+        .accessibilityLabel("\(gesture.displayName)，\(status.isCompleted ? "已完成" : "未完成")")
     }
 
     @ViewBuilder
@@ -545,65 +543,61 @@ struct CalibrationView: View {
                 .stroke(color.opacity(0.2), lineWidth: 1)
         case .recording:
             Circle()
-                .fill(Color.red)
+                .fill(DesignTokens.Colors.error)
         case .completed:
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 12))
-                .foregroundColor(CyberpunkTheme.neonGreen)
+                .foregroundColor(DesignTokens.Colors.success)
         }
     }
 
-    private func cellBackground(for status: GestureCalibrationStatus, color: Color) -> Color {
+    private func cellTint(for status: GestureCalibrationStatus, color: Color) -> Color {
         switch status {
-        case .pending: return Color.white.opacity(0.01)
-        case .recording: return Color.red.opacity(0.08)
-        case .completed: return CyberpunkTheme.neonGreen.opacity(0.05)
-        }
-    }
-
-    private func cellBorder(for status: GestureCalibrationStatus, color: Color) -> Color {
-        switch status {
-        case .pending: return color.opacity(0.1)
-        case .recording: return Color.red.opacity(0.5)
-        case .completed: return CyberpunkTheme.neonGreen.opacity(0.3)
+        case .pending: return .white
+        case .recording: return DesignTokens.Colors.error
+        case .completed: return DesignTokens.Colors.success
         }
     }
 
     // MARK: - Complete View
 
     private var completeView: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: DesignTokens.Spacing.lg) {
             Spacer()
 
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 60))
-                .foregroundColor(CyberpunkTheme.neonGreen)
-                .neonGlow(color: CyberpunkTheme.neonGreen, radius: 10)
+                .foregroundColor(DesignTokens.Colors.success)
+                .neonGlow(color: DesignTokens.Colors.success, radius: 10)
 
             Text("校准完成")
                 .font(.system(size: 22, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonGreen)
+                .foregroundColor(DesignTokens.Colors.success)
 
             Text("「\(profileName)」已设为活跃配置")
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.gray)
 
-            // Summary
-            HStack(spacing: 20) {
-                summaryItem(title: "已校准", value: "\(completedCount)/12", color: CyberpunkTheme.neonGreen)
-                summaryItem(title: "全部手势", value: allCompleted ? "全部完成" : "部分", color: allCompleted ? CyberpunkTheme.neonGreen : CyberpunkTheme.neonYellow)
+            HStack(spacing: DesignTokens.Spacing.lg) {
+                summaryItem(title: "已校准", value: "\(completedCount)/12", color: DesignTokens.Colors.success)
+                summaryItem(title: "全部手势", value: allCompleted ? "全部完成" : "部分", color: allCompleted ? DesignTokens.Colors.success : DesignTokens.Colors.warning)
             }
 
-            // ML training status
             mlTrainingStatusView
 
-            Text("捏合任意手势返回 >>")
-                .font(.system(size: 14, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.accentAmber)
-                .neonGlow(color: CyberpunkTheme.accentAmber, radius: 4)
+            if autoReturnStartTime > 0 {
+                let elapsed = CACurrentMediaTime() - autoReturnStartTime
+                let remaining = max(0, autoReturnDelay - elapsed)
+                Text("\(Int(ceil(remaining)))秒后自动返回...")
+                    .font(.system(size: 14, weight: .bold, design: .monospaced))
+                    .foregroundColor(DesignTokens.Colors.accentAmber)
+                    .neonGlow(color: DesignTokens.Colors.accentAmber, radius: 4)
+            }
 
             Spacer()
         }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("校准完成，\(completedCount)个手势已校准")
     }
 
     private func summaryItem(title: String, value: String, color: Color) -> some View {
@@ -616,13 +610,10 @@ struct CalibrationView: View {
                 .foregroundColor(.gray)
         }
         .padding(12)
-        .background(
+        .frostedGlass(cornerRadius: 6)
+        .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.white.opacity(0.02))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(color.opacity(0.2), lineWidth: 0.5)
-                )
+                .stroke(color.opacity(0.3), lineWidth: 0.5)
         )
     }
 
@@ -635,60 +626,56 @@ struct CalibrationView: View {
                 Image(systemName: "brain")
                     .foregroundColor(.gray)
                 Text("ML模型：未训练")
-                    .font(.system(size: 12, design: .monospaced))
+                    .font(DesignTokens.Typography.mono)
                     .foregroundColor(.gray)
             case .preparing:
                 ProgressView()
                     .scaleEffect(0.7)
                 Text("ML模型：准备训练数据...")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonYellow)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.warning)
             case .training(let progress):
                 ProgressView()
                     .scaleEffect(0.7)
                 Text(String(format: "ML模型：训练中 %.0f%%", progress * 100))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonCyan)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.accentBlue)
             case .completed(let accuracy):
                 Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
                 Text(String(format: "ML模型：训练完成 (准确率: %.1f%%)", accuracy * 100))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.success)
             case .failed(let message):
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
+                    .foregroundColor(DesignTokens.Colors.error)
                 Text("ML模型：训练失败 - \(message)")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(.red)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.error)
                     .lineLimit(2)
             case .skippedRuleBased:
                 Image(systemName: "checkmark.seal.fill")
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
                 Text("使用规则检测（距离+消歧+余弦相似度）")
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .font(DesignTokens.Typography.mono)
+                    .foregroundColor(DesignTokens.Colors.success)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(0.03))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(mlTrainingBorderColor.opacity(0.3), lineWidth: 0.5)
+        .padding(.horizontal, DesignTokens.Spacing.md)
+        .padding(.vertical, DesignTokens.Spacing.xs)
+        .glassMaterial(
+            tint: mlTrainingBorderColor,
+            cornerRadius: DesignTokens.Spacing.CornerRadius.small
         )
     }
 
     private var mlTrainingBorderColor: Color {
         switch model.mlTrainingState {
         case .idle: return .gray
-        case .preparing: return CyberpunkTheme.neonYellow
-        case .training: return CyberpunkTheme.neonCyan
-        case .completed, .skippedRuleBased: return CyberpunkTheme.neonGreen
-        case .failed: return .red
+        case .preparing: return DesignTokens.Colors.warning
+        case .training: return DesignTokens.Colors.accentBlue
+        case .completed, .skippedRuleBased: return DesignTokens.Colors.success
+        case .failed: return DesignTokens.Colors.error
         }
     }
 
@@ -698,7 +685,7 @@ struct CalibrationView: View {
         VStack(spacing: 12) {
             Text("// 配置管理")
                 .font(.system(size: 16, weight: .bold, design: .monospaced))
-                .foregroundColor(CyberpunkTheme.neonCyan)
+                .foregroundColor(DesignTokens.Colors.accentBlue)
                 .padding(.top, 12)
 
             let activeId = CalibrationProfile.loadActiveProfileId()
@@ -727,12 +714,12 @@ struct CalibrationView: View {
     private func defaultProfileRow(isActive: Bool) -> some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(isActive ? CyberpunkTheme.neonGreen : Color.gray.opacity(0.3))
+                .fill(isActive ? DesignTokens.Colors.success : Color.gray.opacity(0.3))
                 .frame(width: 8, height: 8)
 
             Text("默认配置")
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundColor(isActive ? CyberpunkTheme.neonGreen : .white)
+                .foregroundColor(isActive ? DesignTokens.Colors.success : .white)
 
             Text("(硬编码阈值)")
                 .font(.system(size: 11, design: .monospaced))
@@ -746,30 +733,32 @@ struct CalibrationView: View {
                     model.activeProfile = nil
                     savedProfiles = CalibrationProfile.listAll()
                 }
-                .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonGreen))
+                .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.success))
             } else {
                 Text("● 活跃")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
             }
         }
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(isActive ? CyberpunkTheme.neonGreen.opacity(0.4) : Color.gray.opacity(0.15), lineWidth: 0.5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.02)))
+        .frostedGlass(
+            intensity: isActive ? 0.5 : 0.3,
+            cornerRadius: 6,
+            borderWidth: isActive ? 1.5 : 0.5
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("默认配置\(isActive ? "，当前活跃" : "")")
     }
 
     private func profileRow(profile: CalibrationProfile, isActive: Bool) -> some View {
         HStack(spacing: 12) {
             Circle()
-                .fill(isActive ? CyberpunkTheme.neonGreen : Color.gray.opacity(0.3))
+                .fill(isActive ? DesignTokens.Colors.success : Color.gray.opacity(0.3))
                 .frame(width: 8, height: 8)
 
             Text(profile.name)
                 .font(.system(size: 13, weight: .bold, design: .monospaced))
-                .foregroundColor(isActive ? CyberpunkTheme.neonGreen : .white)
+                .foregroundColor(isActive ? DesignTokens.Colors.success : .white)
 
             Text(profile.date, style: .date)
                 .font(.system(size: 11, design: .monospaced))
@@ -787,11 +776,11 @@ struct CalibrationView: View {
                     model.activeProfile = profile
                     savedProfiles = CalibrationProfile.listAll()
                 }
-                .buttonStyle(CyberpunkButtonStyle(color: CyberpunkTheme.neonGreen))
+                .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.success))
             } else {
                 Text("● 活跃")
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(CyberpunkTheme.neonGreen)
+                    .foregroundColor(DesignTokens.Colors.success)
             }
 
             Button("删除") {
@@ -801,21 +790,21 @@ struct CalibrationView: View {
                 }
                 savedProfiles = CalibrationProfile.listAll()
             }
-            .buttonStyle(CyberpunkButtonStyle(color: .red))
+            .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.error))
         }
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(isActive ? CyberpunkTheme.neonGreen.opacity(0.4) : Color.gray.opacity(0.15), lineWidth: 0.5)
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.02)))
+        .frostedGlass(
+            intensity: isActive ? 0.5 : 0.3,
+            cornerRadius: 6,
+            borderWidth: isActive ? 1.5 : 0.5
         )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(profile.name)\(isActive ? "，当前活跃" : "")")
     }
-
 
     // MARK: - Profile Saving
 
     private func finishCalibration() {
-        // Stop any active recording
         if let gesture = currentGesture {
             let result = model.stopCalibrationRecording()
             if result.samples.count >= minSampleCount {
@@ -823,10 +812,8 @@ struct CalibrationView: View {
                 collectedSnapshots[gesture.rawValue] = result.snapshots
                 gestureStatuses[gesture] = .completed(sampleCount: result.samples.count)
             }
-            // 不需要设置为nil，由索引控制
         }
 
-        // Build samples (only completed gestures)
         let samples = collectedSamples.compactMap { (rawValue, floats) -> CalibrationSample? in
             guard !floats.isEmpty else { return nil }
             return CalibrationSample(
@@ -838,7 +825,6 @@ struct CalibrationView: View {
 
         guard !samples.isEmpty else { return }
 
-        // Save profile
         let autoName = CalibrationProfile.nextAutoName()
         profileName = autoName
         var profile = CalibrationProfile(name: autoName, samples: samples)
@@ -847,7 +833,6 @@ struct CalibrationView: View {
         model.activeProfile = profile
         model.referenceHandInfos = profile.allReferenceHandInfos()
 
-        // Trigger ML training (on visionOS returns .skippedRuleBased immediately)
         Task {
             let modelURL = await model.mlTrainer.train(profile: profile)
             await MainActor.run {
@@ -861,6 +846,7 @@ struct CalibrationView: View {
         }
 
         state = .complete
+        autoReturnStartTime = CACurrentMediaTime()
     }
 
     private func resetCalibration() {
@@ -872,27 +858,24 @@ struct CalibrationView: View {
             gestureStatuses[g] = .pending
         }
     }
-    
+
     private func startRecording(gesture: ThumbPinchGesture) {
         let now = CACurrentMediaTime()
         gestureStatuses[gesture] = .recording(startTime: now)
         model.startCalibrationRecording(gesture: gesture)
     }
-    
+
     private func checkRecordingProgress() {
-        // 检查初始倒计时
         if showInitialCountdown {
             let elapsed = CACurrentMediaTime() - initialCountdownStartTime
             if elapsed >= initialCountdownDuration {
                 showInitialCountdown = false
-                // 开始第一个手势的准备倒计时
                 isInPreparation = true
                 preparationStartTime = CACurrentMediaTime()
             }
             return
         }
-        
-        // 检查准备阶段
+
         if isInPreparation {
             let elapsed = CACurrentMediaTime() - preparationStartTime
             if elapsed >= preparationDuration {
@@ -903,30 +886,27 @@ struct CalibrationView: View {
             }
             return
         }
-        
+
         guard let gesture = currentGesture,
               case .recording(let startTime) = gestureStatuses[gesture] else {
             return
         }
-        
+
         let elapsed = CACurrentMediaTime() - startTime
         if elapsed >= recordDuration {
             let (samples, snapshots) = model.stopCalibrationRecording()
-            
+
             let isValid = samples.count >= minSampleCount
-            
+
             if isValid {
                 collectedSamples[gesture.rawValue] = samples
                 collectedSnapshots[gesture.rawValue] = snapshots
                 gestureStatuses[gesture] = .completed(sampleCount: samples.count)
-                
-                // 自动进入下一个手势
+
                 currentGestureIndex += 1
                 if currentGestureIndex >= ThumbPinchGesture.allCases.count {
-                    // 全部完成
                     finishCalibration()
                 } else {
-                    // 开始下一个手势的准备倒计时
                     isInPreparation = true
                     preparationStartTime = CACurrentMediaTime()
                 }

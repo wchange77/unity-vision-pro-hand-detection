@@ -7,6 +7,7 @@ import ARKit
 import SwiftUI
 import RealityKit
 import QuartzCore
+import os
 
 let timerAnchorUpdate = PerfTimer("anchorUpdate")
 let timerPinchDetect = PerfTimer("detectAllPinch")
@@ -21,8 +22,27 @@ struct PinchSummary: Equatable {
     static let zero = PinchSummary(quantizedValue: 0, rawDistance: 0)
 }
 
+/// 线程安全缓冲区：ECS线程写入 → UI线程读取
+/// 优化：分类结果在ECS线程预计算，UI线程只需读取发布
+struct PendingBuffer {
+    var leftSummaries: [ThumbPinchGesture: PinchSummary] = [:]
+    var rightSummaries: [ThumbPinchGesture: PinchSummary] = [:]
+    var leftResults: [ThumbPinchGesture: PinchResult] = [:]
+    var rightResults: [ThumbPinchGesture: PinchResult] = [:]
+    /// ECS线程预计算的分类结果（消除UI线程分类开销）
+    var leftClassification: GestureClassification = .none
+    var rightClassification: GestureClassification = .none
+    var dirty: Bool = false
+    var calibrationSamples: [Float] = []
+    var calibrationHandInfos: [CHHandInfo] = []
+    var calibrationDirty: Bool = false
+    var mlConfidences: [ThumbPinchGesture: Float] = [:]
+}
+
 @Observable
 class HandViewModel: @unchecked Sendable {
+    /// Lock protecting all ECS↔UI shared state in `_pending`
+    private let _lock = OSAllocatedUnfairLock(initialState: PendingBuffer())
     var turnOnImmersiveSpace = false
     var rootEntity: Entity?
 
@@ -53,27 +73,6 @@ class HandViewModel: @unchecked Sendable {
     // Quantized summaries for efficient SwiftUI updates
     var leftPinchSummaries: [ThumbPinchGesture: PinchSummary] = [:]
     var rightPinchSummaries: [ThumbPinchGesture: PinchSummary] = [:]
-
-    // Non-observable buffers written by ECS thread, read by UI via polling
-    // This decouples the ECS render thread from SwiftUI's main thread.
-    @ObservationIgnored
-    var pendingLeftSummaries: [ThumbPinchGesture: PinchSummary] = [:]
-    @ObservationIgnored
-    var pendingRightSummaries: [ThumbPinchGesture: PinchSummary] = [:]
-    @ObservationIgnored
-    var pendingLeftResults: [ThumbPinchGesture: PinchResult] = [:]
-    @ObservationIgnored
-    var pendingRightResults: [ThumbPinchGesture: PinchResult] = [:]
-    @ObservationIgnored
-    var pendingDirty: Bool = false
-
-    // Non-observable calibration buffers (written by ECS thread, flushed to UI)
-    @ObservationIgnored
-    var pendingCalibrationSamples: [Float] = []
-    @ObservationIgnored
-    var pendingCalibrationHandInfos: [CHHandInfo] = []  // raw refs, serialized lazily at stop()
-    @ObservationIgnored
-    var pendingCalibrationDirty: Bool = false
 
     // MARK: - Performance Monitoring (for UI display)
     var perfSnapshots: [PerfSnapshot] = []
@@ -108,13 +107,10 @@ class HandViewModel: @unchecked Sendable {
     // MARK: - Gesture Classifier
     private let gestureClassifier = GestureClassifier()
 
-    /// Cached ML classification results (updated at ~4Hz, not every frame)
-    @ObservationIgnored
-    var cachedMLConfidences: [ThumbPinchGesture: Float] = [:]
     @ObservationIgnored
     private var lastMLInferenceTime: TimeInterval = 0
-    /// ML inference interval (~4Hz)
-    private let mlInferenceInterval: TimeInterval = 0.011
+    /// ML推理间隔：18Hz = 55ms（提升响应速度）
+    private let mlInferenceInterval: TimeInterval = 0.055
 
     /// Latest ML top prediction for calibration UI real-time feedback
     var latestMLPrediction: (gesture: ThumbPinchGesture, confidence: Float)?
@@ -128,63 +124,16 @@ class HandViewModel: @unchecked Sendable {
     @ObservationIgnored
     var referenceHandInfos: [ThumbPinchGesture: CHHandInfo] = [:]
 
-    // MARK: - Gesture Navigation
-    /// 手势导航事件（用于游戏选择等界面）
-    enum GestureNavEvent: Equatable {
-        case up, down, left, right, confirm
-    }
-
-    /// 最新的导航事件（由UI消费后清除）
-    var latestNavEvent: GestureNavEvent?
-
-    /// 是否有游戏正在进行（防止重复打开游戏窗口）
+    /// 是否有游戏正在进行（ECS用于跳过可视化更新）
     var isGamePlaying: Bool = false
 
-    /// 导航手势映射
-    private static let navGestureMap: [ThumbPinchGesture: GestureNavEvent] = [
-        .middleTip: .up,
-        .middleKnuckle: .down,
-        .indexIntermediateTip: .right,
-        .ringIntermediateTip: .left,
-        .middleIntermediateTip: .confirm
-    ]
-
-    /// 防抖：上次导航触发时间
-    @ObservationIgnored
-    private var lastNavTime: TimeInterval = 0
-    @ObservationIgnored
-    private var lastNavGesture: ThumbPinchGesture?
-    private let navDebounceInterval: TimeInterval = 0.4
-
-    /// 检查并发布导航事件（由UI线程的flushPinchDataToUI调用）
-    func checkGestureNavigation() {
-        // 游戏进行时不发布导航事件，防止重复打开窗口
-        guard !isGamePlaying else { return }
-        let now = CACurrentMediaTime()
-        guard now - lastNavTime > navDebounceInterval else { return }
-
-        // 检查左手和右手的检测结果
-        let detectedGestures: [ThumbPinchGesture] = [
-            leftDetectedGesture.gesture,
-            rightDetectedGesture.gesture
-        ].compactMap { $0 }
-
-        for gesture in detectedGestures {
-            if let event = Self.navGestureMap[gesture] {
-                // 避免连续触发同一手势
-                if gesture != lastNavGesture || now - lastNavTime > navDebounceInterval {
-                    latestNavEvent = event
-                    lastNavTime = now
-                    lastNavGesture = gesture
-                    return
-                }
-            }
-        }
-
-        // 如果没有手势被按下，重置lastNavGesture以允许再次触发
-        if detectedGestures.isEmpty {
-            lastNavGesture = nil
-        }
+    /// 强制重建骨架手实体（用户可通过系统手点击按钮触发恢复）
+    /// 策略：关闭沉浸空间 → 重新打开，彻底重建 ARKit + RealityKit
+    @MainActor
+    func forceReloadSkeleton() {
+        print("[Skeleton] Requesting immersive space restart...")
+        // 触发 ContentView 的 onChange: false → dismiss → reset → true → reopen
+        turnOnImmersiveSpace = false
     }
 
     private let session = ARKitSession()
@@ -239,20 +188,22 @@ class HandViewModel: @unchecked Sendable {
     }
 
     func reset() {
+        // 先关闭骨架，确保 didSet 链触发（移除实体 + 恢复系统手）
+        isSkeletonVisible = false
         leftPinchResults = [:]
         rightPinchResults = [:]
         leftPinchSummaries = [:]
         rightPinchSummaries = [:]
+        rootEntity = nil
         clear()
     }
 
     // MARK: - Core: Distance Detection (ECS thread — lightweight only)
 
-    /// Called from ECS thread (~12Hz). Does distance calculation + lightweight cosine similarity.
-    /// Heavy snapshot serialization for calibration is deferred to stopCalibrationRecording().
+    /// ECS线程调用（~30Hz）。执行距离检测 + 余弦相似度 + ML推理 + 分类。
+    /// 核心优化：分类在ECS线程完成，UI线程只需读取结果。
     func detectAllPinchGestures() {
         let t0 = CACurrentMediaTime()
-        var dirty = false
 
         let leftHand = latestHandTracking.leftHandInfo
         let rightHand = latestHandTracking.rightHandInfo
@@ -260,72 +211,107 @@ class HandViewModel: @unchecked Sendable {
         let hasRef = !refs.isEmpty
         let hasML = mlTrainer.isModelLoaded
 
-        // Run ML inference at ~4Hz (not every frame)
+        // 读取缓存的ML置信度
+        let mlConf: [ThumbPinchGesture: Float] = _lock.withLock { $0.mlConfidences }
+
+        // ML推理：12Hz（83ms间隔）— 从4Hz提升3倍
         if hasML, t0 - lastMLInferenceTime > mlInferenceInterval {
             lastMLInferenceTime = t0
             let handForML = rightHand ?? leftHand
             if let handForML {
-                Task.detached { [weak self, mlTrainer] in
-                    guard let results = mlTrainer.classify(handInfo: handForML) else { return }
-                    var newConf: [ThumbPinchGesture: Float] = [:]
-                    for r in results {
+                let trainer = mlTrainer
+                let lock = _lock
+                Task.detached {
+                    guard let results = trainer.classify(handInfo: handForML) else { return }
+                    let newConf = results.reduce(into: [ThumbPinchGesture: Float]()) { dict, r in
                         if let g = ThumbPinchGesture.from(mlLabel: r.label) {
-                            newConf[g] = r.confidence
+                            dict[g] = r.confidence
                         }
                     }
-                    await MainActor.run {
-                        guard let self else { return }
-                        self.cachedMLConfidences = newConf
-                        // 标记需要刷新UI
-                        if let left = self.latestHandTracking.leftHandInfo {
-                            let results = self.detectPinch(for: left, refs: self.referenceHandInfos, hasRef: !self.referenceHandInfos.isEmpty, hasML: true, mlConfidences: newConf)
-                            self.leftPinchResults = results
-                        }
-                        if let right = self.latestHandTracking.rightHandInfo {
-                            let results = self.detectPinch(for: right, refs: self.referenceHandInfos, hasRef: !self.referenceHandInfos.isEmpty, hasML: true, mlConfidences: newConf)
-                            self.rightPinchResults = results
-                        }
-                    }
+                    lock.withLock { $0.mlConfidences = newConf }
                 }
             }
         }
 
-        let mlConf = cachedMLConfidences
+        // 距离检测 + 余弦相似度（纯计算，无共享状态）
+        let leftResults: [ThumbPinchGesture: PinchResult]?
+        let leftSummaries: [ThumbPinchGesture: PinchSummary]?
+        let rightResults: [ThumbPinchGesture: PinchResult]?
+        let rightSummaries: [ThumbPinchGesture: PinchSummary]?
 
         if let leftHand {
-            let newResults = detectPinch(for: leftHand, refs: refs, hasRef: hasRef, hasML: hasML, mlConfidences: mlConf)
-            let newSummaries = quantizeSummaries(newResults)
-            if newSummaries != pendingLeftSummaries {
-                pendingLeftSummaries = newSummaries
-                pendingLeftResults = newResults
-                dirty = true
-            }
+            let r = detectPinch(for: leftHand, refs: refs, hasRef: hasRef, hasML: hasML, mlConfidences: mlConf)
+            leftResults = r
+            leftSummaries = quantizeSummaries(r)
+        } else {
+            leftResults = nil
+            leftSummaries = nil
         }
         if let rightHand {
-            let newResults = detectPinch(for: rightHand, refs: refs, hasRef: hasRef, hasML: hasML, mlConfidences: mlConf)
-            let newSummaries = quantizeSummaries(newResults)
-            if newSummaries != pendingRightSummaries {
-                pendingRightSummaries = newSummaries
-                pendingRightResults = newResults
-                dirty = true
-            }
+            let r = detectPinch(for: rightHand, refs: refs, hasRef: hasRef, hasML: hasML, mlConfidences: mlConf)
+            rightResults = r
+            rightSummaries = quantizeSummaries(r)
+        } else {
+            rightResults = nil
+            rightSummaries = nil
         }
-        if dirty { pendingDirty = true }
 
-        // Calibration: capture raw CHHandInfo reference (NO serialization here)
-        if isCalibrating, let calGesture = calibratingGesture {
-            // Pick the hand with the higher pinch value for the calibrating gesture
-            let leftVal = pendingLeftResults[calGesture]?.pinchValue ?? 0
-            let rightVal = pendingRightResults[calGesture]?.pinchValue ?? 0
-            let handInfo = (leftVal >= rightVal) ? leftHand : rightHand
-            if let handInfo, let thumbTip = handInfo.allJoints[.thumbTip] {
-                let primaryJoint = calGesture.primaryJointName
-                if let joint = handInfo.allJoints[primaryJoint] {
-                    let dist = simd_distance(thumbTip.position, joint.position)
-                    pendingCalibrationSamples.append(dist)
-                    // Store raw hand info reference — serialization deferred to stop()
-                    pendingCalibrationHandInfos.append(handInfo)
-                    pendingCalibrationDirty = true
+        // 在ECS线程执行分类（核心优化：从UI线程移到此处）
+        let leftClass: GestureClassification
+        let rightClass: GestureClassification
+        let hasCalibration = hasRef
+        if let lr = leftResults {
+            leftClass = gestureClassifier.classify(
+                results: lr, chirality: .left,
+                hasCalibration: hasCalibration, hasML: hasML
+            )
+        } else {
+            leftClass = .none
+        }
+        if let rr = rightResults {
+            rightClass = gestureClassifier.classify(
+                results: rr, chirality: .right,
+                hasCalibration: hasCalibration, hasML: hasML
+            )
+        } else {
+            rightClass = .none
+        }
+
+        // 校准状态快照（仅在主线程写入）
+        let currentlyCalibrating = isCalibrating
+        let calGesture = calibratingGesture
+        let calPrimaryJoint = calGesture?.primaryJointName
+
+        // 单次锁操作写入所有结果（包含预计算的分类结果）
+        _lock.withLock { buf in
+            if let s = leftSummaries {
+                if s != buf.leftSummaries { buf.leftSummaries = s }
+                buf.leftResults = leftResults!
+            }
+            if let s = rightSummaries {
+                if s != buf.rightSummaries { buf.rightSummaries = s }
+                buf.rightResults = rightResults!
+            }
+            // 写入预计算的分类结果
+            buf.leftClassification = leftClass
+            buf.rightClassification = rightClass
+
+            if leftResults != nil || rightResults != nil {
+                buf.dirty = true
+            }
+
+            // 校准数据采集
+            if currentlyCalibrating, let calGesture, let calPrimaryJoint {
+                let leftVal = buf.leftResults[calGesture]?.pinchValue ?? 0
+                let rightVal = buf.rightResults[calGesture]?.pinchValue ?? 0
+                let handInfo = (leftVal >= rightVal) ? leftHand : rightHand
+                if let handInfo, let thumbTip = handInfo.allJoints[.thumbTip] {
+                    if let joint = handInfo.allJoints[calPrimaryJoint] {
+                        let dist = simd_distance(thumbTip.position, joint.position)
+                        buf.calibrationSamples.append(dist)
+                        buf.calibrationHandInfos.append(handInfo)
+                        buf.calibrationDirty = true
+                    }
                 }
             }
         }
@@ -333,44 +319,48 @@ class HandViewModel: @unchecked Sendable {
         timerPinchDetect.record(CACurrentMediaTime() - t0)
     }
 
-    /// Called from UI thread (TimelineView) to flush pending data into @Observable properties.
+    /// UI线程调用（TimelineView驱动）：读取ECS线程预计算的结果并发布到@Observable。
+    /// 优化：分类已在ECS线程完成，此处只做读取和发布，零计算开销。
     func flushPinchDataToUI() {
-        if pendingDirty {
-            pendingDirty = false
-            leftPinchSummaries = pendingLeftSummaries
-            rightPinchSummaries = pendingRightSummaries
-            leftPinchResults = pendingLeftResults
-            rightPinchResults = pendingRightResults
-            
-            // 使用分类器进行融合检测
-            let hasCalibration = !referenceHandInfos.isEmpty
-            let hasML = mlTrainer.isModelLoaded
-            leftDetectedGesture = gestureClassifier.classify(
-                results: leftPinchResults,
-                hasCalibration: hasCalibration,
-                hasML: hasML
-            )
-            rightDetectedGesture = gestureClassifier.classify(
-                results: rightPinchResults,
-                hasCalibration: hasCalibration,
-                hasML: hasML
-            )
-            
-            // Check for gesture navigation events
-            checkGestureNavigation()
+        // 单次锁操作读取全部数据
+        let snapshot = _lock.withLock { buf -> PendingBuffer? in
+            guard buf.dirty || buf.calibrationDirty else { return nil }
+            let copy = buf
+            buf.dirty = false
+            buf.calibrationDirty = false
+            buf.calibrationSamples.removeAll(keepingCapacity: true)
+            return copy
         }
-        // Update latest ML prediction for calibration UI
-        if let topEntry = cachedMLConfidences.max(by: { $0.value < $1.value }),
+
+        if let snapshot, snapshot.dirty {
+            // 发布量化摘要（仅在变化时更新，减少SwiftUI重绘）
+            if snapshot.leftSummaries != leftPinchSummaries {
+                leftPinchSummaries = snapshot.leftSummaries
+            }
+            if snapshot.rightSummaries != rightPinchSummaries {
+                rightPinchSummaries = snapshot.rightSummaries
+            }
+            // 发布完整检测结果
+            leftPinchResults = snapshot.leftResults
+            rightPinchResults = snapshot.rightResults
+
+            // 直接读取ECS线程预计算的分类结果（无需重新分类）
+            leftDetectedGesture = snapshot.leftClassification
+            rightDetectedGesture = snapshot.rightClassification
+        }
+
+        // 更新ML预测（用于校准UI实时反馈）
+        let currentMLConf = _lock.withLock { $0.mlConfidences }
+        if let topEntry = currentMLConf.max(by: { $0.value < $1.value }),
            topEntry.value > 0.3 {
             latestMLPrediction = (gesture: topEntry.key, confidence: topEntry.value)
         } else {
             latestMLPrediction = nil
         }
-        // Flush calibration data (samples only — snapshots are deferred)
-        if pendingCalibrationDirty {
-            pendingCalibrationDirty = false
-            calibrationSamples.append(contentsOf: pendingCalibrationSamples)
-            pendingCalibrationSamples.removeAll(keepingCapacity: true)
+
+        // 刷新校准数据
+        if let snapshot, snapshot.calibrationDirty {
+            calibrationSamples.append(contentsOf: snapshot.calibrationSamples)
         }
     }
 
@@ -466,9 +456,11 @@ class HandViewModel: @unchecked Sendable {
     func startCalibrationRecording(gesture: ThumbPinchGesture) {
         calibrationSamples = []
         calibrationSnapshots = []
-        pendingCalibrationSamples = []
-        pendingCalibrationHandInfos = []
-        pendingCalibrationDirty = false
+        _lock.withLock { buf in
+            buf.calibrationSamples = []
+            buf.calibrationHandInfos = []
+            buf.calibrationDirty = false
+        }
         calibratingGesture = gesture
         isCalibrating = true
     }
@@ -481,16 +473,20 @@ class HandViewModel: @unchecked Sendable {
         let gesture = calibratingGesture
         calibratingGesture = nil
 
-        // Flush remaining pending calibration data
-        calibrationSamples.append(contentsOf: pendingCalibrationSamples)
-        let handInfos = pendingCalibrationHandInfos
-        pendingCalibrationSamples = []
-        pendingCalibrationHandInfos = []
-        pendingCalibrationDirty = false
+        // Flush remaining pending calibration data under lock
+        let (pendingSamples, pendingHandInfos) = _lock.withLock { buf -> ([Float], [CHHandInfo]) in
+            let s = buf.calibrationSamples
+            let h = buf.calibrationHandInfos
+            buf.calibrationSamples = []
+            buf.calibrationHandInfos = []
+            buf.calibrationDirty = false
+            return (s, h)
+        }
+        calibrationSamples.append(contentsOf: pendingSamples)
 
         // Serialize CHHandInfo → CHHandJsonModel here (on UI thread, after recording stops)
         let gestureName = gesture?.displayName ?? "unknown"
-        let snapshots = handInfos.map { handInfo in
+        let snapshots = pendingHandInfos.map { handInfo in
             CHHandJsonModel.generateJsonModel(name: gestureName, handInfo: handInfo)
         }
         calibrationSnapshots.append(contentsOf: snapshots)
@@ -504,12 +500,31 @@ class HandViewModel: @unchecked Sendable {
 
     // MARK: - Hand Tracking
 
+    /// Whether hand tracking is available on this device
+    var handTrackingSupported: Bool {
+        HandTrackingProvider.isSupported
+    }
+
+    /// Authorization status for hand tracking
+    var handTrackingAuthorized: Bool = true
+
     func startHandTracking() async {
+        guard HandTrackingProvider.isSupported else {
+            print("[HandTracking] Not supported on this device")
+            return
+        }
+
+        // Check authorization before starting
+        let authStatus = await session.queryAuthorization(for: [.handTracking])
+        if authStatus[.handTracking] != .allowed {
+            print("[HandTracking] Authorization not granted: \(String(describing: authStatus[.handTracking]))")
+            handTrackingAuthorized = false
+            return
+        }
+
         do {
-            if HandTrackingProvider.isSupported {
-                print("ARKitSession starting.")
-                try await session.run([handTracking])
-            }
+            print("ARKitSession starting.")
+            try await session.run([handTracking])
         } catch {
             print("ARKitSession error:", error)
         }
@@ -536,6 +551,11 @@ class HandViewModel: @unchecked Sendable {
                             rootEntity: rootEntity
                         )
                     }
+                } else {
+                    // 恢复脱离场景图的实体（rootEntity 被重建后 entity 可能脱离）
+                    await MainActor.run {
+                        latestHandTracking.recoverDetachedEntities(rootEntity: rootEntity)
+                    }
                 }
             case .removed:
                 let anchor = update.anchor
@@ -550,6 +570,18 @@ class HandViewModel: @unchecked Sendable {
             case .authorizationChanged(let type, let status):
                 if type == .handTracking && status != .allowed {
                     print("Hand tracking authorization changed: \(status)")
+                }
+            case .dataProviderStateChanged(let providers, let newState, _):
+                print("[Session] Provider state → \(newState)")
+                // HandTrackingProvider 从 paused 恢复到 running 时，自动恢复骨架
+                if newState == .running,
+                   providers.contains(where: { $0 is HandTrackingProvider }) {
+                    await MainActor.run {
+                        // 确保骨架可见性正确
+                        if isSkeletonVisible {
+                            latestHandTracking.recoverDetachedEntities(rootEntity: rootEntity)
+                        }
+                    }
                 }
             default:
                 print("Session event: \(event)")
