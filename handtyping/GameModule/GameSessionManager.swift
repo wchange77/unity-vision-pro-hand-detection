@@ -193,12 +193,8 @@ final class GameSessionManager {
 
         let snapshot = gestureEngine.latestSnapshot
 
-        // 校准中禁用全局返回键（校准手势会自然触碰小指指根）
+        // 校准中禁用导航事件（校准手势会触发导航手势，且无人消费）
         guard appFlowState != .calibrating else {
-            navRouter.process(
-                snapshot: snapshot,
-                selectedChirality: selectedChirality
-            )
             return
         }
 
@@ -250,18 +246,21 @@ final class GameSessionManager {
     /// 进入校准流程
     func goToCalibration() {
         SoundManager.shared.playNavClick()
+        navRouter.consumeEvent()  // 清除残留事件
         appFlowState = .calibrating
     }
 
     /// 校准完成，返回校准引导页
     func finishCalibration() {
         SoundManager.shared.playBack()
+        navRouter.consumeEvent()  // 清除校准期间积压的事件
         appFlowState = .calibrationPrompt
     }
 
     /// 跳过校准，进入手选择
     func skipCalibration() {
         SoundManager.shared.playNavClick()
+        navRouter.consumeEvent()
         appFlowState = .handSelection
     }
 
@@ -271,6 +270,7 @@ final class GameSessionManager {
         selectedChirality = chirality
         // 通知 HandViewModel 进入游戏模式
         handViewModel?.isGamePlaying = true
+        navRouter.consumeEvent()
         appFlowState = .gameLobby
     }
 
@@ -279,6 +279,7 @@ final class GameSessionManager {
         guard game.isAvailable else { return }
         SoundManager.shared.playConfirm()
         selectedGame = game
+        navRouter.consumeEvent()
         appFlowState = .playing(game)
     }
 
@@ -286,6 +287,7 @@ final class GameSessionManager {
     func exitToLobby() {
         SoundManager.shared.playBack()
         selectedGame = nil
+        navRouter.consumeEvent()
         appFlowState = .gameLobby
     }
 
@@ -293,6 +295,7 @@ final class GameSessionManager {
     func exitToHandSelection() {
         SoundManager.shared.playBack()
         handViewModel?.isGamePlaying = false
+        navRouter.consumeEvent()
         appFlowState = .handSelection
     }
 
@@ -300,6 +303,7 @@ final class GameSessionManager {
     func exitToCalibrationPrompt() {
         SoundManager.shared.playBack()
         handViewModel?.isGamePlaying = false
+        navRouter.consumeEvent()
         appFlowState = .calibrationPrompt
     }
 }
