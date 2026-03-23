@@ -413,27 +413,13 @@ class HandViewModel: @unchecked Sendable {
                 }
             }
 
-            // Cosine similarity: lightweight dot product math, no allocations
-            var cosineSim: Float = 0
-            if hasRef, pinchValue > 0.3, let refInfo = refs[gesture] {
-                let finger: CHJointOfFinger
-                switch gesture.fingerGroup {
-                case .index: finger = .indexFinger
-                case .middle: finger = .middleFinger
-                case .ring: finger = .ringFinger
-                case .little: finger = .littleFinger
-                }
-                let thumbSim = handInfo.similarity(of: .thumb, to: refInfo)
-                let fingerSim = handInfo.similarity(of: finger, to: refInfo)
-                cosineSim = max(0, (thumbSim + fingerSim) / 2.0)
-            }
-
+            // ML置信度
             results[gesture] = PinchResult(
                 gesture: gesture,
                 pinchValue: pinchValue,
                 rawDistance: primaryDistance,
                 neighborDistances: neighborDistances,
-                cosineSimilarity: cosineSim,
+                cosineSimilarity: 0,
                 mlConfidence: mlConfidences[gesture] ?? 0
             )
         }

@@ -225,18 +225,16 @@ class GestureClassifier {
 
     private func calculateRuleScore(result: PinchResult, hasCalibration: Bool) -> Float {
         let pinchValue = result.pinchValue
-        let cosineSim = result.cosineSimilarity
 
         if hasCalibration {
-            // 有校准：距离50% + 余弦30% + 消歧20%
-            // （余弦从55%降到30%，因为它对手部朝向过度敏感）
-            var score = 0.50 * pinchValue + 0.30 * cosineSim
+            // 有校准：距离65% + 消歧35%（余弦已移除，对手部朝向过度敏感）
+            var score = 0.65 * pinchValue
 
-            // 消歧加成
+            // 消歧加成：邻居关节距离比当前关节远的比例
             if !result.neighborDistances.isEmpty && result.rawDistance < Float.greatestFiniteMagnitude {
                 let closerCount = result.neighborDistances.values.filter { $0 > result.rawDistance }.count
                 let ratio = Float(closerCount) / Float(result.neighborDistances.count)
-                score += 0.20 * ratio
+                score += 0.35 * ratio
             }
 
             return min(1.0, score)
