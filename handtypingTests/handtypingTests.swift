@@ -144,7 +144,7 @@ final class GestureDetectionTests: XCTestCase {
             return
         }
 
-        let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+        let results = model.detectPinch(for: hand)
 
         let indexTipResult = results[.indexTip]
         XCTAssertNotNil(indexTipResult, "Should have result for indexTip gesture")
@@ -159,7 +159,7 @@ final class GestureDetectionTests: XCTestCase {
             return
         }
 
-        let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+        let results = model.detectPinch(for: hand)
 
         for gesture in ThumbPinchGesture.allCases {
             let result = results[gesture]
@@ -177,7 +177,7 @@ final class GestureDetectionTests: XCTestCase {
                 continue
             }
 
-            let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+            let results = model.detectPinch(for: hand)
 
             let result = results[gesture]
             XCTAssertNotNil(result, "\(gesture.displayName): Should have detection result")
@@ -195,7 +195,7 @@ final class GestureDetectionTests: XCTestCase {
             return
         }
 
-        let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+        let results = model.detectPinch(for: hand)
         let result = results[.indexTip]!
 
         XCTAssertEqual(result.neighborDistances.count, ThumbPinchGesture.indexTip.neighborJointNames.count,
@@ -215,7 +215,7 @@ final class GestureDetectionTests: XCTestCase {
             return
         }
 
-        let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+        let results = model.detectPinch(for: hand)
         let result = results[.middleTip]!
 
         // The primary distance should be ~0.005m, and neighbors should be farther
@@ -233,36 +233,37 @@ final class GestureDetectionTests: XCTestCase {
             gesture: .indexTip,
             pinchValue: 0.9,
             rawDistance: 0.01,
+            karmanDistance: 0.3,
             neighborDistances: [
                 .indexFingerIntermediateTip: 0.03,
                 .middleFingerTip: 0.05
             ],
-            cosineSimilarity: 0,
-            mlConfidence: 0
+            releaseMultiplier: 1.3
         )
 
         XCTAssertEqual(result.pinchValue, 0.9, accuracy: 0.01)
         XCTAssertEqual(result.rawDistance, 0.01, accuracy: 0.001)
         XCTAssertEqual(result.neighborDistances.count, 2)
+        XCTAssertEqual(result.karmanDistance, 0.3, accuracy: 0.01)
     }
 
-    /// Test PinchResult with cosine similarity
-    func testPinchResult_withCosineSimilarity() {
+    /// Test PinchResult with ellipsoid fields
+    func testPinchResult_withEllipsoidFields() {
         let result = PinchResult(
             gesture: .middleTip,
             pinchValue: 0.8,
             rawDistance: 0.015,
+            karmanDistance: 0.5,
             neighborDistances: [
                 .middleFingerIntermediateTip: 0.04,
                 .indexFingerTip: 0.05,
                 .ringFingerTip: 0.06
             ],
-            cosineSimilarity: 0.95,
-            mlConfidence: 0.8
+            releaseMultiplier: 1.3
         )
 
-        XCTAssertGreaterThan(result.cosineSimilarity, 0.9)
-        XCTAssertGreaterThan(result.mlConfidence, 0.7)
+        XCTAssertLessThan(result.karmanDistance, 1.0)
+        XCTAssertEqual(result.releaseMultiplier, 1.3, accuracy: 0.01)
     }
 }
 
@@ -276,13 +277,13 @@ final class GestureNavigationTests: XCTestCase {
         let router = GestureNavigationRouter()
         let snapshot = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.0
         )
         router.process(snapshot: snapshot, selectedChirality: .right)
-        XCTAssertEqual(router.latestEvent, .up, "middleTip should map to .up")
+        XCTAssertEqual(router.latestEvent, .up)
     }
 
     /// Verify all 5 navigation gestures map correctly
@@ -300,7 +301,7 @@ final class GestureNavigationTests: XCTestCase {
             let router = GestureNavigationRouter()
             let snapshot = GameGestureSnapshot(
                 leftClassification: .none,
-                rightClassification: .detected(gesture, confidence: 0.9),
+                rightClassification: .detected(gesture, confidence: 0.9, phase: .completed),
                 leftResults: [:],
                 rightResults: [:],
                 timestamp: 1.0
@@ -334,7 +335,7 @@ final class GestureNavigationTests: XCTestCase {
 
         let snapshot1 = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.0
@@ -349,7 +350,7 @@ final class GestureNavigationTests: XCTestCase {
         // Same gesture shortly after — should be debounced
         let snapshot2 = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.2  // only 0.2s later
@@ -365,7 +366,7 @@ final class GestureNavigationTests: XCTestCase {
 
         let snapshot1 = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.0
@@ -376,7 +377,7 @@ final class GestureNavigationTests: XCTestCase {
         // Different gesture — should NOT overwrite unconsumed event
         let snapshot2 = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleKnuckle, confidence: 0.9),
+            rightClassification: .detected(.middleKnuckle, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 2.0
@@ -391,7 +392,7 @@ final class GestureNavigationTests: XCTestCase {
         let router = GestureNavigationRouter()
         let snapshot = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.0
@@ -407,7 +408,7 @@ final class GestureNavigationTests: XCTestCase {
     func testNavEvent_leftHandChirality() {
         let router = GestureNavigationRouter()
         let snapshot = GameGestureSnapshot(
-            leftClassification: .detected(.middleTip, confidence: 0.9),
+            leftClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             rightClassification: .none,
             leftResults: [:],
             rightResults: [:],
@@ -423,7 +424,7 @@ final class GestureNavigationTests: XCTestCase {
         let router = GestureNavigationRouter()
         let snapshot = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.middleTip, confidence: 0.9),
+            rightClassification: .detected(.middleTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.0
@@ -438,7 +439,7 @@ final class GestureNavigationTests: XCTestCase {
         let router = GestureNavigationRouter()
         let snapshot = GameGestureSnapshot(
             leftClassification: .none,
-            rightClassification: .detected(.indexTip, confidence: 0.9),
+            rightClassification: .detected(.indexTip, confidence: 0.9, phase: .completed),
             leftResults: [:],
             rightResults: [:],
             timestamp: 1.0
@@ -458,9 +459,9 @@ final class FlushDataTests: XCTestCase {
         let model = HandViewModel()
         let results: [ThumbPinchGesture: PinchResult] = [
             .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.75, rawDistance: 0.01,
-                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0),
+                                   karmanDistance: 0.25, neighborDistances: [:], releaseMultiplier: 1.3),
             .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.5, rawDistance: 0.03,
-                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                    karmanDistance: 0.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
 
         let summaries = model.quantizeSummaries(results)
@@ -585,25 +586,6 @@ final class CalibrationSampleTests: XCTestCase {
 
         let invalidSample = CalibrationSample(gestureRawValue: 99, samples: [0.02])
         XCTAssertNil(invalidSample.gesture)
-    }
-}
-
-// MARK: - ML Trainer State Tests
-
-final class MLTrainerStateTests: XCTestCase {
-
-    /// On visionOS, training should immediately return .skippedRuleBased.
-    @MainActor
-    func testFallbackTrainer_reportsUnavailable() async {
-        let trainer = GestureMLTrainer()
-        XCTAssertEqual(trainer.state, .idle)
-
-        let profile = CalibrationProfile(name: "test", samples: [])
-        let result = await trainer.train(profile: profile)
-
-        XCTAssertNil(result, "No model URL should be returned on visionOS")
-        XCTAssertEqual(trainer.state, .skippedRuleBased,
-                       "visionOS trainer should return .skippedRuleBased")
     }
 }
 
@@ -755,12 +737,11 @@ final class GameSessionManagerTests: XCTestCase {
         XCTAssertEqual(session.gestureEngine.selectedChirality, .right)
     }
 
-    /// GameType.isAvailable returns true for first 3 games
+    /// GameType.isAvailable returns true for first 2 games
     @MainActor
     func testGameTypeAvailability() {
         XCTAssertTrue(GameType.gestureTest.isAvailable)
-        XCTAssertTrue(GameType.fusionDetection.isAvailable)
-        XCTAssertTrue(GameType.pureML.isAvailable)
+        XCTAssertTrue(GameType.gestureDetection.isAvailable)
         XCTAssertFalse(GameType.rhythmGame.isAvailable)
         XCTAssertFalse(GameType.arcadeGame.isAvailable)
     }
@@ -785,12 +766,12 @@ final class GestureClassifierTests: XCTestCase {
         let classifier = GestureClassifier()
         let results: [ThumbPinchGesture: PinchResult] = [
             .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.9, rawDistance: 0.01,
-                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0),
+                                   karmanDistance: 0.1, neighborDistances: [:], releaseMultiplier: 1.3),
             .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.3, rawDistance: 0.04,
-                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                    karmanDistance: 1.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
 
-        let result = classifier.classify(results: results, chirality: .right, hasCalibration: false, hasML: false)
+        let result = classifier.classify(results: results, chirality: .right)
         XCTAssertEqual(result.gesture, .indexTip)
         XCTAssertGreaterThan(result.confidence, 0.75)
     }
@@ -801,10 +782,10 @@ final class GestureClassifierTests: XCTestCase {
         let classifier = GestureClassifier()
         let results: [ThumbPinchGesture: PinchResult] = [
             .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.3, rawDistance: 0.04,
-                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                   karmanDistance: 1.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
 
-        let result = classifier.classify(results: results, chirality: .right, hasCalibration: false, hasML: false)
+        let result = classifier.classify(results: results, chirality: .right)
         XCTAssertEqual(result.gesture, nil)
     }
 
@@ -814,24 +795,24 @@ final class GestureClassifierTests: XCTestCase {
         let classifier = GestureClassifier()
         let highIndex: [ThumbPinchGesture: PinchResult] = [
             .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.9, rawDistance: 0.01,
-                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                   karmanDistance: 0.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
         let highMiddle: [ThumbPinchGesture: PinchResult] = [
             .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.9, rawDistance: 0.01,
-                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                    karmanDistance: 0.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
 
         // Frame 1: indexTip
-        let r1 = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        let r1 = classifier.classify(results: highIndex, chirality: .right)
         // First frame — not enough history, may return the gesture
         _ = r1
 
         // Frame 2: indexTip again
-        let r2 = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        let r2 = classifier.classify(results: highIndex, chirality: .right)
         XCTAssertEqual(r2.gesture, .indexTip, "2/2 frames agree on indexTip")
 
         // Frame 3: middleTip — now 2/3 are indexTip, 1/3 middleTip
-        let r3 = classifier.classify(results: highMiddle, chirality: .right, hasCalibration: false, hasML: false)
+        let r3 = classifier.classify(results: highMiddle, chirality: .right)
         // indexTip appeared 2 times in last 3 frames, middleTip 1 time
         XCTAssertEqual(r3.gesture, .indexTip, "Majority vote should still be indexTip")
     }
@@ -840,7 +821,7 @@ final class GestureClassifierTests: XCTestCase {
     @MainActor
     func testClassify_emptyResults() {
         let classifier = GestureClassifier()
-        let result = classifier.classify(results: [:], chirality: .right, hasCalibration: false, hasML: false)
+        let result = classifier.classify(results: [:], chirality: .right)
         XCTAssertNil(result.gesture)
     }
 
@@ -850,21 +831,21 @@ final class GestureClassifierTests: XCTestCase {
         let classifier = GestureClassifier()
         let highIndex: [ThumbPinchGesture: PinchResult] = [
             .indexTip: PinchResult(gesture: .indexTip, pinchValue: 0.9, rawDistance: 0.01,
-                                   neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                   karmanDistance: 0.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
         let highMiddle: [ThumbPinchGesture: PinchResult] = [
             .middleTip: PinchResult(gesture: .middleTip, pinchValue: 0.9, rawDistance: 0.01,
-                                    neighborDistances: [:], cosineSimilarity: 0, mlConfidence: 0)
+                                    karmanDistance: 0.5, neighborDistances: [:], releaseMultiplier: 1.3)
         ]
 
         // Right hand: 2 frames of indexTip
-        _ = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
-        let rightResult = classifier.classify(results: highIndex, chirality: .right, hasCalibration: false, hasML: false)
+        _ = classifier.classify(results: highIndex, chirality: .right)
+        let rightResult = classifier.classify(results: highIndex, chirality: .right)
         XCTAssertEqual(rightResult.gesture, .indexTip)
 
         // Left hand: 2 frames of middleTip (independent buffer)
-        _ = classifier.classify(results: highMiddle, chirality: .left, hasCalibration: false, hasML: false)
-        let leftResult = classifier.classify(results: highMiddle, chirality: .left, hasCalibration: false, hasML: false)
+        _ = classifier.classify(results: highMiddle, chirality: .left)
+        let leftResult = classifier.classify(results: highMiddle, chirality: .left)
         XCTAssertEqual(leftResult.gesture, .middleTip)
     }
 }
@@ -933,7 +914,7 @@ final class IntegrationTests: XCTestCase {
             return
         }
 
-        let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+        let results = model.detectPinch(for: hand)
         let summaries = model.quantizeSummaries(results)
 
         // indexTip should have high quantized value
@@ -957,7 +938,7 @@ final class IntegrationTests: XCTestCase {
             return
         }
 
-        let results = model.detectPinch(for: hand, refs: [:], hasRef: false)
+        let results = model.detectPinch(for: hand)
 
         let indexTipScore = results[.indexTip]?.pinchValue ?? 0
         let indexIntScore = results[.indexIntermediateTip]?.pinchValue ?? 0

@@ -71,7 +71,8 @@ final class GameGestureEngine {
             thumbPinch: cls,
             frameworkGesture: cls.gesture?.frameworkGesture,
             navSemantic: cls.gesture?.navSemantic,
-            confidence: cls.confidence
+            confidence: cls.confidence,
+            phase: cls.phase
         )
     }
 
@@ -134,16 +135,11 @@ final class GameGestureEngine {
 
         case .independent:
             // 使用游戏专用分类器（可自定义参数）
-            // 每帧读取最新校准状态（校准完成后立即生效）
-            let hasCalibration = !vm.referenceHandInfos.isEmpty
-            let hasML = vm.mlTrainer.isModelLoaded
             leftClass = classifier.classify(
-                results: leftResults, chirality: .left,
-                hasCalibration: hasCalibration, hasML: hasML
+                results: leftResults, chirality: .left
             )
             rightClass = classifier.classify(
-                results: rightResults, chirality: .right,
-                hasCalibration: hasCalibration, hasML: hasML
+                results: rightResults, chirality: .right
             )
         }
 

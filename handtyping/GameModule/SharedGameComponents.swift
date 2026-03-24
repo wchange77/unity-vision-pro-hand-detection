@@ -214,3 +214,92 @@ struct SkeletonRecoveryButton: View {
         .accessibilityHint("当骨架手消失时，点击此按钮恢复")
     }
 }
+
+// MARK: - Right Sidebar Panel（右侧控制面板）
+
+/// 右侧控制面板 — 3 个等大按钮，纵向排列。
+/// 替代原来太小的 ornament 按钮，使用 VisionUI 框架风格的 frostedGlass 卡片。
+struct RightSidebarPanel: View {
+    @Environment(HandViewModel.self) private var model
+    let session: GameSessionManager
+
+    var body: some View {
+        VStack(spacing: 12) {
+            // 1. 重载骨架
+            SidebarActionCard(
+                icon: "arrow.triangle.2.circlepath",
+                title: "重载骨架",
+                subtitle: "恢复手部追踪",
+                color: DesignTokens.Colors.accentBlue
+            ) {
+                model.forceReloadSkeleton()
+            }
+
+            // 2. 返回上一页
+            SidebarActionCard(
+                icon: "arrow.left",
+                title: "返回",
+                subtitle: "回到上一步",
+                color: DesignTokens.Colors.accentAmber,
+                isDisabled: !session.canGoBack
+            ) {
+                session.handleQuickReturnButton()
+            }
+
+            // 3. 重新校准骨长
+            SidebarActionCard(
+                icon: "ruler",
+                title: "重新校准",
+                subtitle: "校准骨骼长度",
+                color: DesignTokens.Colors.accentPink
+            ) {
+                session.appFlowState = .boneCalibration
+            }
+        }
+        .padding(12)
+    }
+}
+
+/// 右侧面板中的单个操作卡片 — 大尺寸、易点击
+struct SidebarActionCard: View {
+    let icon: String
+    let title: String
+    let subtitle: String
+    let color: Color
+    var isDisabled: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 28, weight: .medium))
+                    .foregroundColor(isDisabled ? .secondary.opacity(0.4) : color)
+
+                VStack(spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundColor(isDisabled ? .secondary.opacity(0.4) : .primary)
+                    Text(subtitle)
+                        .font(.system(size: 11))
+                        .foregroundColor(.secondary.opacity(isDisabled ? 0.3 : 0.7))
+                }
+            }
+            .frame(width: 120, height: 100)
+            .frostedGlass(
+                intensity: 0.4,
+                cornerRadius: 16,
+                borderWidth: 0.5
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .stroke(color.opacity(isDisabled ? 0.1 : 0.3), lineWidth: 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(isDisabled)
+        .opacity(isDisabled ? 0.5 : 1.0)
+        .accessibilityLabel(title)
+        .accessibilityHint(subtitle)
+    }
+}

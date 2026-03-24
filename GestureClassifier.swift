@@ -2,71 +2,96 @@
 //  GestureClassifier.swift
 //  handtyping
 //
-//  统一的手势分类器 - ML保底 + 规则过滤 + 自适应时序平滑
+//  统一的手势分类器 - 卡门椭圆 + 按下/抬起生命周期 + 自适应时序平滑
 //
-//  优化原理：
-//  1. 平滑窗口从3帧缩减到2帧，在30Hz检测频率下延迟从100ms降到66ms
-//  2. 引入"快速确认"机制：高置信度手势(>0.85)跳过平滑直接输出
-//  3. 引入"持续确认"机制：与上一帧相同的手势无需重新达到多数票
-//  4. 规则过滤阈值动态调整：有ML时降低到0.6，提高融合效果
+//  检测流程：
+//  1. 椭球体距离分类：找到最深入椭圆内部的手势（karmanDist < 1.15）
+//     - 消歧：最佳手势必须比次佳领先 20% 以上
+//  2. 自适应时序平滑：2帧窗口 + 快速确认（高置信度直通）
+//  3. 按下/抬起状态机：进入椭圆=按下，离开椭圆=抬起，按下→抬起=完成
+//
 //
 
 import Foundation
 import ARKit
 
-/// 手势分类结果
+// MARK: - 手势阶段
+
+/// 手势在按下→抬起生命周期中的阶段
+enum GesturePhase: Equatable, Sendable {
+    /// 拇指进入椭圆区域，手指正在按下
+    case pressing
+    /// 拇指离开椭圆区域，完成一次完整手势（瞬态，一帧后回到 idle）
+    case completed
+}
+
+// MARK: - 手势分类结果
+
+/// 手势分类结果（含按下/抬起阶段）
 enum GestureClassification: Equatable {
     case none
-    case detected(ThumbPinchGesture, confidence: Float)
+    case detected(ThumbPinchGesture, confidence: Float, phase: GesturePhase)
 
     var gesture: ThumbPinchGesture? {
-        if case .detected(let g, _) = self { return g }
+        if case .detected(let g, _, _) = self { return g }
         return nil
     }
 
     var confidence: Float {
-        if case .detected(_, let c) = self { return c }
+        if case .detected(_, let c, _) = self { return c }
         return 0
     }
+
+    var phase: GesturePhase? {
+        if case .detected(_, _, let p) = self { return p }
+        return nil
+    }
+
+    /// 是否刚完成一次按下→抬起周期
+    var isCompleted: Bool { phase == .completed }
+
+    /// 是否正在按下中
+    var isPressing: Bool { phase == .pressing }
 }
 
+// MARK: - 统一手势分类器
+
 /// 统一手势分类器
-/// 架构：ML识别（保底）→ 规则过滤（个性化校准）→ 自适应时序平滑
-/// 每只手独立的平滑缓冲区防止交叉污染。
+/// 架构：椭球体距离分类 → 时序平滑 → 按下/抬起状态机
+/// 每只手独立的平滑缓冲区和状态机防止交叉污染。
 ///
 /// 线程安全说明：此类在 ECS 线程调用，不可从多线程并发访问。
-/// 如需多线程使用，请创建独立实例。
 class GestureClassifier {
 
-    // MARK: - 阈值配置（参考 VisionOS-UI-Framework TrackingSensitivity 分级模式）
+    // MARK: - 阈值配置
 
-    /// ML置信度阈值 - 保底检测
-    private(set) var mlThreshold: Float = 0.45
-    /// 规则过滤阈值 - 有校准数据时的验证门槛
-    private(set) var ruleThresholdWithCalibration: Float = 0.60
-    /// 纯规则模式阈值（无ML时）
-    private(set) var ruleThresholdNoML: Float = 0.75
     /// 快速确认阈值 - 高置信度手势跳过平滑
-    private(set) var fastConfirmThreshold: Float = 0.85
+    private(set) var fastConfirmThreshold: Float = 0.65
+
+    /// 卡门圆进入阈值（karmanDist < 此值才算检测到手势）
+    private(set) var entryThreshold: Float = 1.15
+
+    /// 消歧距离边际：最佳手势的 karmanDist 必须比次佳小此比例
+    /// 例如 0.20 表示最佳必须比次佳领先 20%
+    private(set) var disambiguationMargin: Float = 0.20
+
+    /// 同手指不同关节间的消歧边际（更宽松，因为同手指关节间距本身就小）
+    /// 例如 ringTip vs ringIntermediateTip — 只要最佳领先 8% 就接受
+    private(set) var sameFingerDisambiguationMargin: Float = 0.08
 
     // MARK: - 时序平滑
 
-    /// 每只手独立的缓冲区
     private var leftRecentGestures: [ThumbPinchGesture?] = []
     private var rightRecentGestures: [ThumbPinchGesture?] = []
-    /// 上一帧的确认手势（用于持续确认机制）
-    private var leftLastConfirmed: ThumbPinchGesture?
-    private var rightLastConfirmed: ThumbPinchGesture?
-    /// 平滑窗口大小（2帧 = 66ms@30Hz，响应更快）
     private(set) var smoothingWindow = 2
+
+    // MARK: - 按下/抬起状态机
+
+    private let phaseTracker = GesturePhaseTracker()
 
     // MARK: - 配置
 
-    /// 应用 GestureConfig 配置（初始化或切换场景时调用）
     func configure(_ config: GestureConfig) {
-        mlThreshold = config.mlThreshold
-        ruleThresholdNoML = config.ruleThreshold
-        ruleThresholdWithCalibration = config.fusionRuleThreshold
         fastConfirmThreshold = config.fastConfirmThreshold
         smoothingWindow = config.smoothingWindow
         reset()
@@ -74,67 +99,107 @@ class GestureClassifier {
 
     // MARK: - 公开接口
 
-    /// 分类手势：ML保底 + 规则过滤 + 自适应时序平滑
+    /// 分类手势：椭球体距离 → 时序平滑 → 按下/抬起生命周期
     func classify(
         results: [ThumbPinchGesture: PinchResult],
-        chirality: HandAnchor.Chirality,
-        hasCalibration: Bool,
-        hasML: Bool
+        chirality: HandAnchor.Chirality
     ) -> GestureClassification {
         guard !results.isEmpty else { return .none }
 
-        // 1. 基础分类
-        let rawResult: GestureClassification
-        if !hasML {
-            rawResult = classifyByRuleOnly(results: results)
-        } else {
-            rawResult = classifyByMLWithRuleFilter(results: results, hasCalibration: hasCalibration)
-        }
+        // 1. 卡门圆距离分类（含消歧）
+        let rawResult = classifyByKarmanCircle(results: results)
 
         // 2. 自适应时序平滑
-        return smoothGesture(rawResult, chirality: chirality)
+        let smoothed = smoothGesture(rawResult, chirality: chirality)
+
+        // 3. 按下/抬起生命周期
+        guard let gesture = smoothed.gesture else {
+            // 无手势检测时也需更新状态机（可能触发 release）
+            return phaseTracker.update(
+                bestGesture: nil,
+                karmanDist: Float.greatestFiniteMagnitude,
+                releaseMultiplier: 1.6,
+                confidence: 0,
+                chirality: chirality
+            )
+        }
+
+        let dist = results[gesture]?.karmanDistance ?? Float.greatestFiniteMagnitude
+        let releaseMult = results[gesture]?.releaseMultiplier ?? 1.6
+
+        return phaseTracker.update(
+            bestGesture: gesture,
+            karmanDist: dist,
+            releaseMultiplier: releaseMult,
+            confidence: smoothed.confidence,
+            chirality: chirality
+        )
     }
 
-    /// 重置平滑缓冲区（切换场景时调用）
+    /// 重置平滑缓冲区和状态机
     func reset() {
         leftRecentGestures.removeAll()
         rightRecentGestures.removeAll()
-        leftLastConfirmed = nil
-        rightLastConfirmed = nil
+        phaseTracker.reset()
+    }
+
+    // MARK: - 卡门圆距离分类（含消歧）
+
+    /// 找到卡门圆距离最小（最深入圆内部）的手势
+    /// 消歧：如果最佳和次佳手势距离接近（差距 < disambiguationMargin），拒绝输出
+    private func classifyByKarmanCircle(results: [ThumbPinchGesture: PinchResult]) -> GestureClassification {
+        // 按 karmanDistance 排序取前2
+        let sorted = results.sorted { $0.value.karmanDistance < $1.value.karmanDistance }
+        guard let best = sorted.first,
+              best.value.karmanDistance < entryThreshold else {
+            return .none
+        }
+
+        // 消歧检查：如果次佳存在且距离接近，拒绝（防止相邻关节误触）
+        // 同手指不同关节间使用更宽松的边际（解剖学上间距更小）
+        if sorted.count >= 2 {
+            let secondBest = sorted[1]
+            let bestDist = best.value.karmanDistance
+            let secondDist = secondBest.value.karmanDistance
+            // 如果两者都在椭圆内，且差距不够大 → 模糊，拒绝
+            if secondDist < entryThreshold {
+                let gap = secondDist - bestDist
+                let relativeGap = gap / max(secondDist, 0.001)
+                // 同手指竞争用更宽松的边际
+                let isSameFinger = best.key.fingerGroup == secondBest.key.fingerGroup
+                let margin = isSameFinger ? sameFingerDisambiguationMargin : disambiguationMargin
+                if relativeGap < margin {
+                    return .none
+                }
+            }
+        }
+
+        let confidence = max(0, 1.0 - best.value.karmanDistance)
+        return .detected(best.key, confidence: confidence, phase: .pressing)
     }
 
     // MARK: - 自适应时序平滑
 
     private func smoothGesture(_ raw: GestureClassification, chirality: HandAnchor.Chirality) -> GestureClassification {
         let rawGesture = raw.gesture
-        let lastConfirmed: ThumbPinchGesture?
 
-        // 更新缓冲区并获取上次确认手势
         switch chirality {
         case .left:
             leftRecentGestures.append(rawGesture)
             if leftRecentGestures.count > smoothingWindow { leftRecentGestures.removeFirst() }
-            lastConfirmed = leftLastConfirmed
         case .right:
             rightRecentGestures.append(rawGesture)
             if rightRecentGestures.count > smoothingWindow { rightRecentGestures.removeFirst() }
-            lastConfirmed = rightLastConfirmed
         @unknown default:
             return raw
         }
 
-        // 快速确认：高置信度手势直接输出，跳过平滑
-        if raw.confidence > fastConfirmThreshold, let gesture = rawGesture {
-            updateLastConfirmed(gesture, chirality: chirality)
+        // 快速确认：高置信度手势直接输出
+        if raw.confidence > fastConfirmThreshold, rawGesture != nil {
             return raw
         }
 
-        // 持续确认：与上一帧相同的手势直接延续
-        if rawGesture != nil && rawGesture == lastConfirmed {
-            return raw
-        }
-
-        // 标准平滑：需要缓冲区中多数帧同意
+        // 标准平滑：多数帧同意
         let buffer: [ThumbPinchGesture?]
         switch chirality {
         case .left: buffer = leftRecentGestures
@@ -144,103 +209,17 @@ class GestureClassifier {
 
         guard buffer.count >= 2 else { return raw }
 
-        // 统计最近N帧中出现最多的手势
         var counts: [ThumbPinchGesture?: Int] = [:]
         for g in buffer { counts[g, default: 0] += 1 }
 
         guard let (mostCommon, count) = counts.max(by: { $0.value < $1.value }) else {
-            updateLastConfirmed(nil, chirality: chirality)
-            return raw
+            return .none
         }
 
-        // 多数帧同意（2/2 或 2/3+）
         if count >= 2, let gesture = mostCommon {
-            updateLastConfirmed(gesture, chirality: chirality)
-            return .detected(gesture, confidence: raw.confidence)
+            return .detected(gesture, confidence: raw.confidence, phase: .pressing)
         }
 
-        // 无共识 → none（但保留上次确认用于下一帧持续检测）
-        updateLastConfirmed(nil, chirality: chirality)
         return .none
-    }
-
-    private func updateLastConfirmed(_ gesture: ThumbPinchGesture?, chirality: HandAnchor.Chirality) {
-        switch chirality {
-        case .left: leftLastConfirmed = gesture
-        case .right: rightLastConfirmed = gesture
-        @unknown default: break
-        }
-    }
-
-    // MARK: - 纯规则检测（无ML时）
-
-    private func classifyByRuleOnly(results: [ThumbPinchGesture: PinchResult]) -> GestureClassification {
-        guard let best = results.max(by: { $0.value.pinchValue < $1.value.pinchValue }),
-              best.value.pinchValue > ruleThresholdNoML else {
-            return .none
-        }
-        return .detected(best.key, confidence: best.value.pinchValue)
-    }
-
-    // MARK: - ML保底 + 规则软调节
-
-    private func classifyByMLWithRuleFilter(
-        results: [ThumbPinchGesture: PinchResult],
-        hasCalibration: Bool
-    ) -> GestureClassification {
-        // 1. ML识别：找出ML置信度最高的手势
-        guard let mlBest = results.max(by: { $0.value.mlConfidence < $1.value.mlConfidence }),
-              mlBest.value.mlConfidence > mlThreshold else {
-            return .none
-        }
-
-        let mlGesture = mlBest.key
-        let mlConf = mlBest.value.mlConfidence
-
-        // 2. 无校准：直接使用ML结果
-        guard hasCalibration else {
-            return .detected(mlGesture, confidence: mlConf)
-        }
-
-        // 3. 有校准：ML为主，规则作为软调节（不做硬拒绝）
-        let ruleScore = calculateRuleScore(result: mlBest.value, hasCalibration: true)
-
-        // ML高置信度(>0.65)：直接信任ML，规则只微调分数
-        if mlConf > 0.65 {
-            let finalScore = 0.8 * mlConf + 0.2 * ruleScore
-            return .detected(mlGesture, confidence: finalScore)
-        }
-
-        // ML中等置信度(0.45~0.65)：规则辅助验证
-        // 只有规则分数极低(<0.20)才拒绝（明显的误检测）
-        if ruleScore < 0.20 {
-            return .none
-        }
-
-        let finalScore = 0.65 * mlConf + 0.35 * ruleScore
-        return .detected(mlGesture, confidence: finalScore)
-    }
-
-    // MARK: - 规则得分计算
-
-    private func calculateRuleScore(result: PinchResult, hasCalibration: Bool) -> Float {
-        let pinchValue = result.pinchValue
-
-        if hasCalibration {
-            // 有校准：距离65% + 消歧35%（余弦已移除，对手部朝向过度敏感）
-            var score = 0.65 * pinchValue
-
-            // 消歧加成：邻居关节距离比当前关节远的比例
-            if !result.neighborDistances.isEmpty && result.rawDistance < Float.greatestFiniteMagnitude {
-                let closerCount = result.neighborDistances.values.filter { $0 > result.rawDistance }.count
-                let ratio = Float(closerCount) / Float(result.neighborDistances.count)
-                score += 0.35 * ratio
-            }
-
-            return min(1.0, score)
-        } else {
-            // 无校准：只用距离
-            return pinchValue
-        }
     }
 }

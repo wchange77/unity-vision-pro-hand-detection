@@ -2,7 +2,7 @@
 //  ThumbPinchView.swift → FusionDetectionView
 //  handtyping
 //
-//  规则+ML 融合检测游戏视图。
+//  手势检测游戏视图。
 //  原 ThumbPinchView 改造：移除 toolbar 导航按钮，改用 session 参数。
 //  保持核心双手检测 + 性能面板功能不变。
 //
@@ -47,9 +47,7 @@ struct FusionDetectionView: View {
                             .foregroundColor(model.turnOnImmersiveSpace ? .primary : .secondary)
                     }
 
-                    Spacer()
-
-                    Text("融合检测")
+                    Text("手势检测")
                         .font(.system(size: 18, weight: .bold, design: .rounded))
                         .foregroundColor(.primary)
 
@@ -65,8 +63,6 @@ struct FusionDetectionView: View {
                             .font(.system(size: 12))
                             .foregroundColor(.secondary)
                     }
-
-                    mlTrainingIndicator(state: model.mlTrainingState)
                 }
                 .padding(.horizontal, DesignTokens.Spacing.md)
                 .padding(.vertical, 10)
@@ -78,6 +74,7 @@ struct FusionDetectionView: View {
                     HandColumn(
                         title: "L",
                         summaries: model.leftPinchSummaries,
+                        results: model.leftPinchResults,
                         isActive: model.turnOnImmersiveSpace,
                         detectedGestures: [model.leftDetectedGesture.gesture].compactMap { $0 }
                     )
@@ -89,6 +86,7 @@ struct FusionDetectionView: View {
                     HandColumn(
                         title: "R",
                         summaries: model.rightPinchSummaries,
+                        results: model.rightPinchResults,
                         isActive: model.turnOnImmersiveSpace,
                         detectedGestures: [model.rightDetectedGesture.gesture].compactMap { $0 }
                     )
@@ -126,46 +124,6 @@ struct FusionDetectionView: View {
         }
     }
 
-    @ViewBuilder
-    private func mlTrainingIndicator(state: GestureMLTrainer.TrainingState) -> some View {
-        HStack(spacing: 4) {
-            switch state {
-            case .idle:
-                EmptyView()
-            case .preparing:
-                ProgressView().scaleEffect(0.5)
-                Text("准备训练")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.accentAmber)
-            case .training(let progress):
-                ProgressView().scaleEffect(0.5)
-                Text(String(format: "训练 %.0f%%", progress * 100))
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.accentBlue)
-            case .completed:
-                Image(systemName: "brain.filled.head.profile")
-                    .font(.system(size: 10))
-                    .foregroundColor(DesignTokens.Colors.success)
-                Text("ML就绪")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.success)
-            case .skippedRuleBased:
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(DesignTokens.Colors.success)
-                Text("规则检测")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.success)
-            case .failed:
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 10))
-                    .foregroundColor(DesignTokens.Colors.error)
-                Text("ML失败")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.error)
-            }
-        }
-    }
 }
 
 // MARK: - Hand Column (one per hand)
@@ -173,6 +131,7 @@ struct FusionDetectionView: View {
 struct HandColumn: View {
     let title: String
     let summaries: [ThumbPinchGesture: PinchSummary]
+    let results: [ThumbPinchGesture: PinchResult]
     let isActive: Bool
     let detectedGestures: [ThumbPinchGesture]
 
@@ -187,6 +146,7 @@ struct HandColumn: View {
                 FingerGroupCard(
                     group: group,
                     summaries: summaries,
+                    results: results,
                     detectedGestures: detectedGestures
                 )
             }
@@ -199,6 +159,7 @@ struct HandColumn: View {
 struct FingerGroupCard: View {
     let group: ThumbPinchGesture.FingerGroup
     let summaries: [ThumbPinchGesture: PinchSummary]
+    let results: [ThumbPinchGesture: PinchResult]
     let detectedGestures: [ThumbPinchGesture]
 
     private var anyPinched: Bool {
@@ -233,6 +194,7 @@ struct FingerGroupCard: View {
                     JointProgressRow(
                         label: gesture.shortLabel,
                         summary: summaries[gesture] ?? .zero,
+                        karmanDistance: results[gesture]?.karmanDistance,
                         color: groupColor,
                         isPinched: detectedGestures.contains(gesture)
                     )
@@ -271,11 +233,26 @@ struct FingerGroupCard: View {
 struct JointProgressRow: View {
     let label: String
     let summary: PinchSummary
+    let karmanDistance: Float?
     let color: Color
     let isPinched: Bool
 
+    /// karmanDistance 驱动的归一化进度值
+    /// karmanDist < 1.0 → 按下中（>50%），1.0~2.0 → 接近（0~50%），>2.0 → 0
     private var displayValue: Float {
-        Float(summary.quantizedValue) / 20.0
+        guard let kDist = karmanDistance else {
+            // 无 karmanDistance 时回退到 quantizedValue
+            return Float(summary.quantizedValue) / 20.0
+        }
+        if kDist >= 2.0 { return 0 }
+        if kDist <= 0 { return 1.0 }
+        // 线性映射：2.0 → 0, 0.0 → 1.0
+        return max(0, min(1.0, (2.0 - kDist) / 2.0))
+    }
+
+    /// karmanDistance 百分比显示
+    private var displayPercent: Int {
+        Int(displayValue * 100)
     }
 
     var body: some View {
@@ -291,7 +268,7 @@ struct JointProgressRow: View {
             )
             .frame(width: 100)
 
-            Text(String(format: "%d%%", summary.quantizedValue * 5))
+            Text(String(format: "%d%%", displayPercent))
                 .font(DesignTokens.Typography.monoDigit)
                 .frame(width: 34, alignment: .trailing)
                 .foregroundColor(isPinched ? DesignTokens.Colors.success : .secondary.opacity(0.7))

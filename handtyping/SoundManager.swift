@@ -4,6 +4,7 @@
 //
 //  轻量级音效管理器。
 //  使用 AudioToolbox 系统音效，零 per-frame 开销。
+//  整个系统只保留触发圆离开时的水滴破裂音。
 //
 
 import AudioToolbox
@@ -15,27 +16,9 @@ final class SoundManager: @unchecked Sendable {
 
     private init() {}
 
-    /// 导航方向键（上下左右）
-    func playNavClick() {
+    /// 触发圆离开时的水滴破裂音效
+    func playGestureComplete() {
         guard isEnabled else { return }
-        AudioServicesPlaySystemSound(1104) // tock
-    }
-
-    /// 确认操作
-    func playConfirm() {
-        guard isEnabled else { return }
-        AudioServicesPlaySystemSound(1025)
-    }
-
-    /// 返回操作
-    func playBack() {
-        guard isEnabled else { return }
-        AudioServicesPlaySystemSound(1105)
-    }
-
-    /// 三连击快速返回触发
-    func playTripleTap() {
-        guard isEnabled else { return }
-        AudioServicesPlaySystemSound(1057) // tink
+        AudioServicesPlaySystemSound(1057) // tink — 清脆水滴音
     }
 }

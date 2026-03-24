@@ -21,96 +21,95 @@ import UIKit
 
 /// 应用流程状态机（替代原 GameFlowState）
 enum AppFlowState: Equatable {
+    case boneCalibration      // 双手骨架校准（新增，最先执行）
     case calibrationPrompt    // 校准引导页
-    case calibrating          // 校准进行中
     case handSelection        // 左右手选择
+    case gestureCalibration   // 手势校准（重命名自 calibrating）
     case gameLobby            // 游戏大厅
     case playing(GameType)    // 游戏进行中
 }
 
 // MARK: - Game Type
 
-/// 10 个游戏类型（3 个可用 + 7 个预留）
+/// 10 个游戏类型
 enum GameType: String, CaseIterable, Identifiable {
-    case gestureTest       // 手势测试（现有 GamePlayingView）
-    case fusionDetection   // 规则+ML融合检测（现有 ThumbPinchView）
-    case pureML            // 纯ML检测（现有 PureMLView）
-    case rhythmGame        // 节奏游戏
-    case typingPractice    // 打字练习
-    case gestureCanvas     // 手势画板
-    case reactionGame      // 反应游戏
-    case memoryGame        // 记忆游戏
-    case puzzleGame        // 拼图游戏
-    case arcadeGame        // 街机游戏
+    case gestureTest       // 手势测试
+    case gestureDetection  // 规则检测
+    case game2048          // 2048
+    case pianoTiles        // 别踩白块
+    case snake             // 贪吃蛇
+    case tetris            // 俄罗斯方块
+    case breakout          // 打砖块
+    case flappyBird        // 直升机（原 Flappy Bird）
+    case runner            // 青蛙过河（原跑酷）
+    case typingRain        // 字母雨打字游戏
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .gestureTest:      return "手势测试"
-        case .fusionDetection:  return "融合检测"
-        case .pureML:           return "纯ML检测"
-        case .rhythmGame:       return "节奏游戏"
-        case .typingPractice:   return "打字练习"
-        case .gestureCanvas:    return "手势画板"
-        case .reactionGame:     return "反应游戏"
-        case .memoryGame:       return "记忆游戏"
-        case .puzzleGame:       return "拼图游戏"
-        case .arcadeGame:       return "街机游戏"
+        case .gestureDetection: return "手势检测"
+        case .game2048:         return "2048"
+        case .pianoTiles:       return "别踩白块"
+        case .snake:            return "贪吃蛇"
+        case .tetris:           return "俄罗斯方块"
+        case .breakout:         return "打砖块"
+        case .flappyBird:       return "直升机"
+        case .runner:           return "青蛙过河"
+        case .typingRain:       return "字母雨"
         }
     }
 
     var icon: String {
         switch self {
         case .gestureTest:      return "hand.raised"
-        case .fusionDetection:  return "waveform.path.ecg"
-        case .pureML:           return "brain"
-        case .rhythmGame:       return "music.note"
-        case .typingPractice:   return "keyboard"
-        case .gestureCanvas:    return "paintbrush"
-        case .reactionGame:     return "bolt.fill"
-        case .memoryGame:       return "square.grid.3x3"
-        case .puzzleGame:       return "puzzlepiece"
-        case .arcadeGame:       return "gamecontroller"
+        case .gestureDetection: return "hand.point.up.left.and.text"
+        case .game2048:         return "square.grid.2x2"
+        case .pianoTiles:       return "square.grid.3x3.fill"
+        case .snake:            return "arrow.turn.up.right"
+        case .tetris:           return "square.stack.3d.up"
+        case .breakout:         return "circle.grid.cross"
+        case .flappyBird:       return "helicopter"
+        case .runner:           return "hare"
+        case .typingRain:       return "textformat.abc"
         }
     }
 
     var color: Color {
         switch self {
         case .gestureTest:      return DesignTokens.Colors.accentBlue
-        case .fusionDetection:  return DesignTokens.Colors.accentGreen
-        case .pureML:           return DesignTokens.Colors.accentPink
-        case .rhythmGame:       return DesignTokens.Colors.accentPurple
-        case .typingPractice:   return DesignTokens.Colors.accentAmber
-        case .gestureCanvas:    return DesignTokens.Colors.accentBlue
-        case .reactionGame:     return DesignTokens.Colors.error
-        case .memoryGame:       return DesignTokens.Colors.success
-        case .puzzleGame:       return DesignTokens.Colors.warning
-        case .arcadeGame:       return DesignTokens.Colors.accentPink
+        case .gestureDetection: return DesignTokens.Colors.accentGreen
+        case .game2048:         return DesignTokens.Colors.accentAmber
+        case .pianoTiles:       return DesignTokens.Colors.accentPink
+        case .snake:            return DesignTokens.Colors.success
+        case .tetris:           return DesignTokens.Colors.accentPurple
+        case .breakout:         return DesignTokens.Colors.accentBlue
+        case .flappyBird:       return DesignTokens.Colors.warning
+        case .runner:           return DesignTokens.Colors.error
+        case .typingRain:       return DesignTokens.Colors.accentGreen
         }
     }
 
     var description: String {
         switch self {
         case .gestureTest:      return "测试全部12个手势"
-        case .fusionDetection:  return "规则+ML实时融合检测"
-        case .pureML:           return "纯ML置信度显示"
-        case .rhythmGame:       return "跟随节奏做手势"
-        case .typingPractice:   return "手势打字练习"
-        case .gestureCanvas:    return "手势绘画"
-        case .reactionGame:     return "手势反应速度"
-        case .memoryGame:       return "手势记忆挑战"
-        case .puzzleGame:       return "手势拼图"
-        case .arcadeGame:       return "手势街机"
+        case .gestureDetection: return "实时手势检测与可视化"
+        case .game2048:         return "经典数字合成游戏"
+        case .pianoTiles:       return "别踩白块手势版"
+        case .snake:            return "经典贪吃蛇"
+        case .tetris:           return "俄罗斯方块"
+        case .breakout:         return "打砖块"
+        case .flappyBird:       return "经典直升机闯关"
+        case .runner:           return "经典青蛙过河"
+        case .typingRain:       return "3D字母雨打字"
         }
     }
 
     var isAvailable: Bool {
         switch self {
-        case .gestureTest, .fusionDetection, .pureML:
+        case .gestureTest, .gestureDetection, .pianoTiles, .typingRain, .game2048, .snake, .tetris, .breakout, .flappyBird, .runner:
             return true
-        default:
-            return false
         }
     }
 }
@@ -159,6 +158,21 @@ final class GameSessionManager {
         gestureEngine.activeGesture.isActive
     }
 
+    /// 全局返回键长按进度 (0-1)
+    var quickBackProgress: Float {
+        quickBackDetector.progress
+    }
+
+    /// 是否可以返回（用于按钮禁用状态）
+    var canGoBack: Bool {
+        switch appFlowState {
+        case .playing, .gameLobby, .handSelection, .gestureCalibration:
+            return true
+        case .calibrationPrompt, .boneCalibration:
+            return false
+        }
+    }
+
     // MARK: - 对 HandViewModel 的引用
 
     @ObservationIgnored
@@ -177,7 +191,8 @@ final class GameSessionManager {
         gestureEngine.bind(to: viewModel)
         // 配置独立分类器阈值（passthrough 模式下不影响 ECS 分类器）
         gestureEngine.configureClassifier(config)
-        appFlowState = .calibrationPrompt
+        // 首次启动从骨架标定开始
+        appFlowState = .boneCalibration
     }
 
     /// 全局返回键检测器（大拇指捏小指指根）
@@ -193,12 +208,7 @@ final class GameSessionManager {
 
         let snapshot = gestureEngine.latestSnapshot
 
-        // 校准中禁用导航事件（校准手势会触发导航手势，且无人消费）
-        guard appFlowState != .calibrating else {
-            return
-        }
-
-        // 全局返回键检测（高优先级，优先于正常导航）
+        // 全局返回键检测（所有状态都可用，包括校准）
         let results: [ThumbPinchGesture: PinchResult]
         switch selectedChirality {
         case .left: results = snapshot.leftResults
@@ -208,7 +218,13 @@ final class GameSessionManager {
 
         if quickBackDetector.update(pinchValue: knuckleValue, timestamp: snapshot.timestamp) {
             handleQuickReturn()
-            return  // 跳过本 tick 的正常导航
+            return
+        }
+
+        // 校准中：仅更新导航提示高亮，不触发导航事件
+        if appFlowState == .gestureCalibration {
+            navRouter.updateHintOnly(snapshot: snapshot, selectedChirality: selectedChirality)
+            return
         }
 
         navRouter.process(
@@ -217,9 +233,20 @@ final class GameSessionManager {
         )
     }
 
-    /// 全局返回键处理
+    /// 全局返回键处理（手势长按触发）
     private func handleQuickReturn() {
-        SoundManager.shared.playBack()
+        // 游戏中和校准中禁用手势返回
+        if case .playing = appFlowState {
+            return
+        }
+        if appFlowState == .gestureCalibration {
+            return
+        }
+        handleQuickReturnButton()
+    }
+
+    /// 全局返回键处理（按钮或手势触发）
+    func handleQuickReturnButton() {
         // VoiceOver 无障碍播报
         if UIAccessibility.isVoiceOverRunning {
             UIAccessibility.post(
@@ -234,9 +261,9 @@ final class GameSessionManager {
             exitToHandSelection()
         case .handSelection:
             exitToCalibrationPrompt()
-        case .calibrating:
+        case .gestureCalibration:
             finishCalibration()
-        case .calibrationPrompt:
+        case .calibrationPrompt, .boneCalibration:
             break
         }
     }
@@ -245,65 +272,57 @@ final class GameSessionManager {
 
     /// 进入校准流程
     func goToCalibration() {
-        SoundManager.shared.playNavClick()
-        navRouter.consumeEvent()  // 清除残留事件
-        appFlowState = .calibrating
+        appFlowState = .gestureCalibration
+        navRouter.consumeEvent()  // 状态转换后清除
     }
 
     /// 校准完成，返回校准引导页
     func finishCalibration() {
-        SoundManager.shared.playBack()
-        navRouter.consumeEvent()  // 清除校准期间积压的事件
         appFlowState = .calibrationPrompt
+        navRouter.consumeEvent()  // 状态转换后清除
     }
 
     /// 跳过校准，进入手选择
     func skipCalibration() {
-        SoundManager.shared.playNavClick()
-        navRouter.consumeEvent()
         appFlowState = .handSelection
+        navRouter.consumeEvent()
     }
 
     /// 确认选择左/右手，进入游戏大厅
     func confirmHand(_ chirality: HandAnchor.Chirality) {
-        SoundManager.shared.playConfirm()
         selectedChirality = chirality
-        // 通知 HandViewModel 进入游戏模式
-        handViewModel?.isGamePlaying = true
-        navRouter.consumeEvent()
         appFlowState = .gameLobby
+        navRouter.consumeEvent()
     }
 
     /// 选择并启动游戏
     func selectGame(_ game: GameType) {
         guard game.isAvailable else { return }
-        SoundManager.shared.playConfirm()
         selectedGame = game
-        navRouter.consumeEvent()
+        handViewModel?.isGamePlaying = true
         appFlowState = .playing(game)
+        navRouter.consumeEvent()
     }
 
     /// 从游戏返回到大厅
     func exitToLobby() {
-        SoundManager.shared.playBack()
         selectedGame = nil
-        navRouter.consumeEvent()
+        handViewModel?.isGamePlaying = false
         appFlowState = .gameLobby
+        navRouter.consumeEvent()
     }
 
     /// 从大厅返回到手选择
     func exitToHandSelection() {
-        SoundManager.shared.playBack()
         handViewModel?.isGamePlaying = false
-        navRouter.consumeEvent()
         appFlowState = .handSelection
+        navRouter.consumeEvent()
     }
 
     /// 从手选择返回到校准引导
     func exitToCalibrationPrompt() {
-        SoundManager.shared.playBack()
         handViewModel?.isGamePlaying = false
-        navRouter.consumeEvent()
         appFlowState = .calibrationPrompt
+        navRouter.consumeEvent()
     }
 }

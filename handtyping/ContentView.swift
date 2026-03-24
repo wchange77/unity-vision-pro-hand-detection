@@ -56,13 +56,13 @@ struct ContentView: View {
                     .padding(.trailing, DesignTokens.Spacing.lg)
                     .glassBackgroundEffect()
             }
-            // 骨架恢复按钮 ornament（右侧，系统手可点击）
+            // 全局控制按钮 ornament（右侧，系统手可点击）
             .ornament(
                 visibility: .visible,
                 attachmentAnchor: .scene(.trailing),
                 contentAlignment: .leading
             ) {
-                SkeletonRecoveryButton()
+                RightSidebarPanel(session: session)
                     .padding(.leading, DesignTokens.Spacing.lg)
                     .glassBackgroundEffect()
             }
@@ -98,6 +98,7 @@ struct ContentView: View {
                         await dismissImmersiveSpace()
                         immersiveSpaceOpened = false
                         model.reset()
+                        session.appFlowState = .calibrationPrompt
                         // 短暂等待后自动重新打开（支持骨架恢复按钮的"重启"流程）
                         try? await Task.sleep(for: .milliseconds(500))
                         model.turnOnImmersiveSpace = true
@@ -120,21 +121,24 @@ struct ContentView: View {
             .accessibilityLabel("错误：无法启动沉浸空间")
         } else {
             switch session.appFlowState {
+            case .boneCalibration:
+                BoneCalibrationView(session: session)
+                    .transition(.opacity.combined(with: .scale(0.95)))
             case .calibrationPrompt:
                 CalibrationPromptView(session: session)
-                    .transition(.opacity.combined(with: .scale(0.98)))
-            case .calibrating:
-                CalibrationView(onComplete: { session.finishCalibration() })
-                    .transition(.opacity.combined(with: .scale(0.98)))
+                    .transition(.opacity)
             case .handSelection:
                 GameHandSelectionView(session: session)
                     .transition(.push(from: .trailing))
+            case .gestureCalibration:
+                CalibrationView(onComplete: { session.finishCalibration() })
+                    .transition(.opacity.combined(with: .scale(0.98)))
             case .gameLobby:
                 GameLobbyView(session: session)
                     .transition(.push(from: .trailing))
             case .playing(let gameType):
                 GamePlayView(session: session, gameType: gameType)
-                    .transition(.push(from: .trailing))
+                    .transition(.scale(1.02).combined(with: .opacity))
             }
         }
     }

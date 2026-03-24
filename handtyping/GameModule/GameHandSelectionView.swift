@@ -70,8 +70,8 @@ struct GameHandSelectionView: View {
         .frame(minWidth: 500, minHeight: 350)
         .onChange(of: session.navRouter.latestEvent) { _, event in
             guard let event else { return }
+            defer { session.navRouter.consumeEvent() }
             handleNav(event)
-            session.navRouter.consumeEvent()
         }
     }
 

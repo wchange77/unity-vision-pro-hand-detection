@@ -147,14 +147,8 @@ struct HandTrackingSystem: System {
             Self.timerPinchDetect.record(CACurrentMediaTime() - tDetect)
         }
 
-        // 游戏进行时跳过可视化和性能统计
-        if viewModel.isGamePlaying {
-            Self.timerECSTotal.record(CACurrentMediaTime() - t0)
-            return
-        }
-
-        // Visualization update (only when skeleton visible, every other frame)
-        if viewModel.isSkeletonVisible && frameCount % 2 == 0 {
+        // 可视化更新（触发圆始终运行，关节高亮仅骨架可见时运行）
+        if frameCount % 2 == 0 {
             let tVis = CACurrentMediaTime()
             viewModel.updatePinchVisualization()
             Self.timerPinchVis.record(CACurrentMediaTime() - tVis)

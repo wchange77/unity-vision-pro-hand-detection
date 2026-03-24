@@ -94,8 +94,8 @@ struct GameNavigationHintView: View {
                         intensity: isActive ? 0.7 : 0,
                         animated: false
                     )
-                    .scaleEffect(isActive ? 1.3 : 1.0)
-                    .animation(.spring(response: 0.2, dampingFraction: 0.6), value: isActive)
+                    .scaleEffect(isActive ? 1.4 : 1.0)
+                    .animation(.spring(response: 0.15, dampingFraction: 0.7), value: isActive)
                     .position(x: x, y: y)
                 }
             }

@@ -7,8 +7,8 @@
 //  带防抖和事件队列，确保不丢失输入。
 //
 //  设计原则：
-//  - 与检测引擎同优先级运行
-//  - 零延迟：检测结果立即转换为导航事件
+//  - 按下即触发：手势进入按下状态时立即发射导航事件（零延迟）
+//  - 防重复：同一手势按下期间不重复触发，释放后才允许再次触发
 //  - 事件不丢失：使用消费模式而非覆盖模式
 //
 
@@ -46,20 +46,27 @@ final class GestureNavigationRouter {
         .middleIntermediateTip: .confirm
     ]
     
-    /// 防抖间隔（秒）
-    var debounceInterval: TimeInterval = 0.5
+    /// 防抖间隔（秒）— 同一手势释放后到允许再次触发的最小间隔
+    var debounceInterval: TimeInterval = 0.15
     
     // MARK: - 内部状态
-    
+
     @ObservationIgnored
     private var lastEventTime: TimeInterval = 0
     @ObservationIgnored
-    private var lastEventGesture: ThumbPinchGesture?
+    private var eventGeneratedTime: TimeInterval = 0
+    /// 当前正在按下中的手势（按下期间不重复触发，释放后清除）
+    @ObservationIgnored
+    private var pressingGesture: ThumbPinchGesture?
+
+    /// 事件超时时间（秒）
+    private let eventTimeout: TimeInterval = 1.0
     
     // MARK: - 核心：处理手势快照
     
     /// 从 GameGestureEngine 的快照中提取导航事件。
-    /// 由 flush 循环在主线程调用。
+    /// 按下即触发：手势进入 pressing 状态时立即发射事件。
+    /// 同一手势按下期间不重复触发，释放后才允许再次触发。
     func process(snapshot: GameGestureSnapshot, selectedChirality: HandAnchor.Chirality?) {
         // 获取选定手的分类结果
         let classification: GestureClassification
@@ -73,50 +80,74 @@ final class GestureNavigationRouter {
                 ? snapshot.rightClassification
                 : snapshot.leftClassification
         }
-        
+
         let detectedGesture = classification.gesture
-        
-        // 更新激活的导航手势（用于UI高亮）
+
+        // 更新激活的导航手势（按下中就显示，给用户实时反馈）
         if let g = detectedGesture, Self.gestureMap[g] != nil {
             activeNavGesture = g
-        } else {
+        } else if detectedGesture == nil {
             activeNavGesture = nil
         }
-        
-        // 上一个事件还没被消费，不覆盖
-        guard latestEvent == nil else { return }
-        
+
         let now = snapshot.timestamp
-        guard now - lastEventTime > debounceInterval else { return }
-        
-        if let gesture = detectedGesture, let event = Self.gestureMap[gesture] {
-            if gesture != lastEventGesture || now - lastEventTime > debounceInterval {
-                latestEvent = event
-                lastEventTime = now
-                lastEventGesture = gesture
-                // 播放导航音效
-                if event == .confirm {
-                    SoundManager.shared.playConfirm()
-                } else {
-                    SoundManager.shared.playNavClick()
-                }
-                // VoiceOver 无障碍播报
-                if UIAccessibility.isVoiceOverRunning {
-                    UIAccessibility.post(
-                        notification: .announcement,
-                        argument: event.accessibilityLabel
-                    )
-                }
-                return
-            }
+
+        // 自动清理超时未消费的事件
+        if latestEvent != nil && now - eventGeneratedTime > eventTimeout {
+            latestEvent = nil
         }
-        
-        // 没有手势时重置，允许再次触发
-        if detectedGesture == nil {
-            lastEventGesture = nil
+
+        // 手势释放：清除 pressingGesture，允许再次触发
+        if classification.isCompleted || detectedGesture == nil {
+            pressingGesture = nil
+        }
+
+        // 手势正在按下中：按下即触发
+        if classification.isPressing,
+           let gesture = detectedGesture,
+           let event = Self.gestureMap[gesture] {
+            // 同一手势按下期间不重复触发
+            guard gesture != pressingGesture else { return }
+            // 上一个事件还没被消费，不覆盖
+            guard latestEvent == nil else { return }
+            // 防抖
+            guard now - lastEventTime > debounceInterval else { return }
+
+            latestEvent = event
+            eventGeneratedTime = now
+            lastEventTime = now
+            pressingGesture = gesture
+            // VoiceOver 无障碍播报
+            if UIAccessibility.isVoiceOverRunning {
+                UIAccessibility.post(
+                    notification: .announcement,
+                    argument: event.accessibilityLabel
+                )
+            }
         }
     }
     
+    /// 仅更新导航提示高亮，不触发导航事件（校准期间使用）
+    func updateHintOnly(snapshot: GameGestureSnapshot, selectedChirality: HandAnchor.Chirality?) {
+        let classification: GestureClassification
+        switch selectedChirality {
+        case .left:
+            classification = snapshot.leftClassification
+        case .right:
+            classification = snapshot.rightClassification
+        default:
+            classification = snapshot.rightClassification.gesture != nil
+                ? snapshot.rightClassification
+                : snapshot.leftClassification
+        }
+        let detectedGesture = classification.gesture
+        if let g = detectedGesture, Self.gestureMap[g] != nil {
+            activeNavGesture = g
+        } else if detectedGesture == nil {
+            activeNavGesture = nil
+        }
+    }
+
     /// 消费事件（视图调用）
     func consumeEvent() {
         latestEvent = nil

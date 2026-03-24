@@ -13,7 +13,6 @@ struct GameLobbyView: View {
     @Bindable var session: GameSessionManager
 
     @State private var focusedIndex: Int = 0
-    @State private var focusOnBack: Bool = false
 
     private let columns = 5
     private let games = GameType.allCases
@@ -21,27 +20,11 @@ struct GameLobbyView: View {
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.md) {
             // 标题栏
-            HStack {
-                GestureNavButton(
-                    title: "返回",
-                    icon: "chevron.left",
-                    color: DesignTokens.Colors.accentAmber,
-                    isFocused: focusOnBack,
-                    action: { session.exitToHandSelection() }
-                )
-
-                Spacer()
-
-                Text("游戏大厅")
-                    .font(.system(size: 24, weight: .bold, design: .rounded))
-                    .foregroundColor(.primary)
-                    .holographic(speed: MotionAdaptive.isReduced ? 0 : 4.0)
-
-                Spacer()
-
-                // 占位，保持标题居中
-                Color.clear.frame(width: 80, height: 1)
-            }
+            Text("游戏大厅")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
+                .foregroundColor(.primary)
+                .holographic(speed: MotionAdaptive.isReduced ? 0 : 4.0)
+                .frame(maxWidth: .infinity)
 
             Divider().opacity(0.15)
 
@@ -61,8 +44,8 @@ struct GameLobbyView: View {
         .frame(minWidth: 800, minHeight: 400)
         .onChange(of: session.navRouter.latestEvent) { _, event in
             guard let event else { return }
+            defer { session.navRouter.consumeEvent() }
             handleNavEvent(event)
-            session.navRouter.consumeEvent()
         }
     }
 
@@ -79,11 +62,10 @@ struct GameLobbyView: View {
                             let game = games[index]
                             LobbyGameCard(
                                 game: game,
-                                isSelected: !focusOnBack && index == focusedIndex
+                                isSelected: index == focusedIndex
                             )
                             .onTapGesture {
                                 focusedIndex = index
-                                focusOnBack = false
                                 if game.isAvailable {
                                     session.selectGame(game)
                                 }
@@ -101,47 +83,32 @@ struct GameLobbyView: View {
     // MARK: - Navigation
 
     private func handleNavEvent(_ event: GameNavEvent) {
-        if focusOnBack {
-            switch event {
-            case .up:
-                focusOnBack = false
-            case .confirm:
-                session.exitToHandSelection()
-            default:
-                break
-            }
-            return
-        }
-
         let row = focusedIndex / columns
         let col = focusedIndex % columns
         let rows = (games.count + columns - 1) / columns
 
         switch event {
         case .up:
-            if row == 0 {
-                // already top row, do nothing
-            } else {
+            if row > 0 {
                 let newRow = row - 1
                 let newIndex = newRow * columns + col
                 if newIndex < games.count { focusedIndex = newIndex }
             }
         case .down:
-            if row >= rows - 1 {
-                focusOnBack = true
-            } else {
+            if row < rows - 1 {
                 let newRow = row + 1
                 let newIndex = newRow * columns + col
                 if newIndex < games.count { focusedIndex = newIndex }
             }
         case .left:
-            let newCol = (col - 1 + columns) % columns
-            let newIndex = row * columns + newCol
-            if newIndex < games.count { focusedIndex = newIndex }
+            if col > 0 {
+                focusedIndex = row * columns + (col - 1)
+            }
         case .right:
-            let newCol = (col + 1) % columns
-            let newIndex = row * columns + newCol
-            if newIndex < games.count { focusedIndex = newIndex }
+            if col < columns - 1 {
+                let newIndex = row * columns + (col + 1)
+                if newIndex < games.count { focusedIndex = newIndex }
+            }
         case .confirm:
             let game = games[focusedIndex]
             if game.isAvailable {

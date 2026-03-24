@@ -11,31 +11,18 @@ import SwiftUI
 struct GamePlayingView: View {
     @Bindable var session: GameSessionManager
 
-    @State private var focusOnBack: Bool = false
-
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.md) {
             // 标题栏
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("手势测试")
-                        .font(.system(size: 22, weight: .bold, design: .rounded))
-                        .foregroundColor(.primary)
-                    Text("实时手势检测")
-                        .font(DesignTokens.Typography.caption)
-                        .foregroundColor(.secondary)
-                }
-
-                Spacer()
-
-                GestureNavButton(
-                    title: "返回",
-                    icon: "chevron.left",
-                    color: DesignTokens.Colors.accentAmber,
-                    isFocused: focusOnBack,
-                    action: { session.exitToLobby() }
-                )
+            VStack(alignment: .leading, spacing: 4) {
+                Text("手势测试")
+                    .font(.system(size: 22, weight: .bold, design: .rounded))
+                    .foregroundColor(.primary)
+                Text("实时手势检测")
+                    .font(DesignTokens.Typography.caption)
+                    .foregroundColor(.secondary)
             }
+            .frame(maxWidth: .infinity)
 
             Divider().opacity(0.15)
 
@@ -79,30 +66,6 @@ struct GamePlayingView: View {
         }
         .padding(DesignTokens.Spacing.lg)
         .frame(minWidth: 600, minHeight: 480)
-        .onChange(of: session.navRouter.latestEvent) { _, event in
-            guard let event else { return }
-            guard session.isGamePlaying else {
-                session.navRouter.consumeEvent()
-                return
-            }
-            handleNavEvent(event)
-            session.navRouter.consumeEvent()
-        }
-    }
-
-    private func handleNavEvent(_ event: GameNavEvent) {
-        switch event {
-        case .up:
-            focusOnBack = false
-        case .down:
-            focusOnBack = true
-        case .confirm:
-            if focusOnBack {
-                session.exitToLobby()
-            }
-        default:
-            break
-        }
     }
 
     // MARK: - Gesture Status Grid

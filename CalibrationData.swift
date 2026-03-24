@@ -9,14 +9,47 @@ import ARKit
 /// 单个手势的校准采样数据
 struct CalibrationSample: Codable, Sendable {
     let gestureRawValue: Int
+    /// 按下阶段的距离采样
     let samples: [Float]
+    /// 抬起阶段的距离采样
+    let releaseSamples: [Float]
     /// 校准录制期间每帧的完整手势快照（用于余弦相似度比对和ML训练）
     var handSnapshots: [CHHandJsonModel]
+    /// 每帧采样的时间戳（秒，相对于录制开始）
+    var timestamps: [Double]
+    /// 每帧相邻关节的距离（用于消歧分析）
+    var neighborDistances: [[Float]]
+    /// V形分析结果：进入阈值（距离开始下降时的距离）
+    var entryThreshold: Float?
+    /// V形分析结果：离开阈值（距离恢复到此值时认为完成）
+    var exitThreshold: Float?
 
-    init(gestureRawValue: Int, samples: [Float], handSnapshots: [CHHandJsonModel] = []) {
+    init(gestureRawValue: Int, samples: [Float], releaseSamples: [Float] = [], handSnapshots: [CHHandJsonModel] = [], timestamps: [Double] = [], neighborDistances: [[Float]] = []) {
         self.gestureRawValue = gestureRawValue
         self.samples = samples
+        self.releaseSamples = releaseSamples
         self.handSnapshots = handSnapshots
+        self.timestamps = timestamps
+        self.neighborDistances = neighborDistances
+    }
+
+    // MARK: - Codable 向后兼容
+    enum CodingKeys: String, CodingKey {
+        case gestureRawValue, samples, releaseSamples, handSnapshots
+        case timestamps, neighborDistances
+        case entryThreshold, exitThreshold
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        gestureRawValue = try c.decode(Int.self, forKey: .gestureRawValue)
+        samples = try c.decode([Float].self, forKey: .samples)
+        releaseSamples = try c.decodeIfPresent([Float].self, forKey: .releaseSamples) ?? []
+        handSnapshots = try c.decodeIfPresent([CHHandJsonModel].self, forKey: .handSnapshots) ?? []
+        timestamps = try c.decodeIfPresent([Double].self, forKey: .timestamps) ?? []
+        neighborDistances = try c.decodeIfPresent([[Float]].self, forKey: .neighborDistances) ?? []
+        entryThreshold = try c.decodeIfPresent(Float.self, forKey: .entryThreshold)
+        exitThreshold = try c.decodeIfPresent(Float.self, forKey: .exitThreshold)
     }
 
     var gesture: ThumbPinchGesture? {
@@ -25,14 +58,30 @@ struct CalibrationSample: Codable, Sendable {
 
     var mean: Float {
         guard !samples.isEmpty else { return 0 }
-        return samples.reduce(0, +) / Float(samples.count)
+        let filtered = filterOutliers(samples)
+        return filtered.reduce(0, +) / Float(filtered.count)
     }
 
     var stdDev: Float {
-        guard samples.count > 1 else { return 0 }
-        let m = mean
-        let variance = samples.map { ($0 - m) * ($0 - m) }.reduce(0, +) / Float(samples.count - 1)
+        let filtered = filterOutliers(samples)
+        guard filtered.count > 1 else { return 0 }
+        let m = filtered.reduce(0, +) / Float(filtered.count)
+        let variance = filtered.map { ($0 - m) * ($0 - m) }.reduce(0, +) / Float(filtered.count - 1)
         return sqrt(variance)
+    }
+
+    /// 过滤异常值：使用四分位距（IQR）方法
+    private func filterOutliers(_ data: [Float]) -> [Float] {
+        guard data.count > 4 else { return data }
+        let sorted = data.sorted()
+        let q1Index = sorted.count / 4
+        let q3Index = (sorted.count * 3) / 4
+        let q1 = sorted[q1Index]
+        let q3 = sorted[q3Index]
+        let iqr = q3 - q1
+        let lowerBound = q1 - 1.5 * iqr
+        let upperBound = q3 + 1.5 * iqr
+        return data.filter { $0 >= lowerBound && $0 <= upperBound }
     }
 
     var minRecorded: Float {
@@ -59,7 +108,7 @@ struct CalibrationSample: Codable, Sendable {
         return handSnapshots[bestIndex]
     }
 
-    /// 基于统计数据生成个性化阈值
+    /// 基于统计数据生成个性化阈值（含椭球体和释放倍数）
     func derivedPinchConfig() -> PinchConfig {
         guard !samples.isEmpty, let gesture else {
             return ThumbPinchGesture.indexTip.pinchConfig
@@ -71,7 +120,40 @@ struct CalibrationSample: Codable, Sendable {
         let finalMin = max(derivedMin, fallback.minDistance * 0.5)
         let finalMax = max(derivedMax, finalMin + 0.01)
 
-        return PinchConfig(maxDistance: finalMax, minDistance: finalMin)
+        return PinchConfig(
+            maxDistance: finalMax,
+            minDistance: finalMin,
+            karmanCircle: derivedKarmanCircleConfig(),
+            releaseMultiplier: derivedReleaseMultiplier()
+        )
+    }
+
+    /// 从按下采样推导卡门圆配置
+    /// 使用默认卡门圆参数：校准数据只用于距离阈值，不膨胀卡门圆
+    func derivedKarmanCircleConfig() -> KarmanCircleConfig {
+        guard let gesture else {
+            return ThumbPinchGesture.indexTip.defaultKarmanCircle
+        }
+        return gesture.defaultKarmanCircle
+    }
+
+    /// 从抬起采样推导释放倍数
+    /// releaseMultiplier = mean(release) / mean(press)，clamped 1.2~2.5
+    func derivedReleaseMultiplier() -> Float {
+        guard !releaseSamples.isEmpty, !samples.isEmpty else { return 1.3 }
+
+        // 使用过滤后的数据
+        let filteredPress = filterOutliers(samples)
+        let filteredRelease = filterOutliers(releaseSamples)
+
+        guard !filteredPress.isEmpty, !filteredRelease.isEmpty else { return 1.3 }
+
+        let pressMean = filteredPress.reduce(0, +) / Float(filteredPress.count)
+        guard pressMean > 0.001 else { return 1.3 }
+
+        let releaseMean = filteredRelease.reduce(0, +) / Float(filteredRelease.count)
+        let ratio = releaseMean / pressMean
+        return min(max(ratio, 1.2), 2.5)
     }
 }
 
@@ -81,15 +163,16 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
     let date: Date
     var name: String
     let samples: [CalibrationSample]
-    /// 训练好的 CoreML 模型文件名（相对于配置目录）
-    var mlModelFileName: String?
+    var boneLengthRatios: [String: Float]?
+    var measuredBoneLengths: [String: Float]?
 
-    init(name: String, samples: [CalibrationSample]) {
+    init(name: String, samples: [CalibrationSample], boneLengthRatios: [String: Float]? = nil, measuredBoneLengths: [String: Float]? = nil) {
         self.id = UUID()
         self.date = Date()
         self.name = name
         self.samples = samples
-        self.mlModelFileName = nil
+        self.boneLengthRatios = boneLengthRatios
+        self.measuredBoneLengths = measuredBoneLengths
     }
 
     func pinchConfig(for gesture: ThumbPinchGesture) -> PinchConfig {
@@ -103,26 +186,16 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
         samples.first(where: { $0.gestureRawValue == gesture.rawValue })
     }
 
-    /// 获取指定手势的代表性 CHHandInfo 快照（用于余弦相似度比对）
-    func referenceHandInfo(for gesture: ThumbPinchGesture) -> CHHandInfo? {
-        sample(for: gesture)?.representativeSnapshot?.convertToCHHandInfo()
-    }
+    /// 卡门圆配置：基于骨节长度计算，校准后微调 releaseMultiplier
+    func normalizedKarmanCircle(for gesture: ThumbPinchGesture) -> KarmanCircleConfig {
+        var config = gesture.karmanCircleFromBoneLength(measuredBoneLengths ?? [:])
 
-    /// 获取所有手势的代表性快照
-    func allReferenceHandInfos() -> [ThumbPinchGesture: CHHandInfo] {
-        var result: [ThumbPinchGesture: CHHandInfo] = [:]
-        for gesture in ThumbPinchGesture.allCases {
-            if let info = referenceHandInfo(for: gesture) {
-                result[gesture] = info
-            }
+        // 如果有校准数据，使用校准的 releaseMultiplier 微调
+        if let sample = sample(for: gesture) {
+            config.releaseMultiplier = sample.derivedReleaseMultiplier()
         }
-        return result
-    }
 
-    /// ML 模型文件 URL
-    var mlModelURL: URL? {
-        guard let fileName = mlModelFileName else { return nil }
-        return Self.profilesDirectory.appendingPathComponent(fileName)
+        return config
     }
 
     // MARK: - 自动命名
@@ -176,13 +249,7 @@ struct CalibrationProfile: Codable, Sendable, Identifiable {
 
     static func delete(id: UUID) {
         let url = profilesDirectory.appendingPathComponent("\(id.uuidString).json")
-        // Read profile BEFORE deleting to get ML model URL
-        let profile = load(id: id)
         try? FileManager.default.removeItem(at: url)
-        // Delete associated ML model if present
-        if let mlURL = profile?.mlModelURL {
-            try? FileManager.default.removeItem(at: mlURL)
-        }
         if loadActiveProfileId() == id {
             clearActiveProfile()
         }

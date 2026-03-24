@@ -1,3 +1,5 @@
+
+
 //
 //  File.swift
 //  ChimetaHandgame
@@ -16,7 +18,7 @@ public struct CHJointJsonModel: Sendable, Equatable {
 
 extension CHJointJsonModel: Codable {
     enum CodingKeys: CodingKey {
-        case name
+            case name
         case isTracked
         case transform
     }

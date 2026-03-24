@@ -50,6 +50,20 @@ public class ChimetaHandgameManager {
     private var lastHighlightedLeft: Set<String> = []
     private var lastHighlightedRight: Set<String> = []
 
+    /// 校准驱动的关节基础缩放（lateralRadius / 默认半径），默认1.0
+    private var calibrationScales: [ThumbPinchGesture: Float] = [:]
+
+    // 触发圆 (torus) 实体缓存 — 附加在 rootEntity（世界空间），不受骨架显隐影响
+    private var leftTriggerCircles: [ThumbPinchGesture: ModelEntity] = [:]
+    private var rightTriggerCircles: [ThumbPinchGesture: ModelEntity] = [:]
+    private var triggerCircleMesh: MeshResource?
+    private var triggerCircleMaterials: [String: any RealityKit.Material] = [:]
+    /// 校准实际骨长（米），用于触发圆半径
+    var measuredBoneLengths: [String: Float]?
+    /// 上一帧显示的触发圆手势（用于检测离开事件）
+    private var lastLeftTriggerGesture: ThumbPinchGesture?
+    private var lastRightTriggerGesture: ThumbPinchGesture?
+
     // Cached entity references for O(1) lookup (populated during generation)
     private var leftJointEntities: [String: ModelEntity] = [:]
     private var rightJointEntities: [String: ModelEntity] = [:]
@@ -269,6 +283,10 @@ public class ChimetaHandgameManager {
             leftJointEntities = [:]
             leftCollisionEntities = [:]
             leftLineEntities = [:]
+            // 移除触发圆实体
+            for (_, entity) in leftTriggerCircles { entity.removeFromParent() }
+            leftTriggerCircles = [:]
+            lastLeftTriggerGesture = nil
         } else if handAnchor.chirality == .right {
             right?.removeFromParent()
             right = nil
@@ -276,6 +294,10 @@ public class ChimetaHandgameManager {
             rightJointEntities = [:]
             rightCollisionEntities = [:]
             rightLineEntities = [:]
+            // 移除触发圆实体
+            for (_, entity) in rightTriggerCircles { entity.removeFromParent() }
+            rightTriggerCircles = [:]
+            lastRightTriggerGesture = nil
         }
     }
 
@@ -293,6 +315,17 @@ public class ChimetaHandgameManager {
         rightJointEntities = [:]
         rightCollisionEntities = [:]
         rightLineEntities = [:]
+        // 清除触发圆实体
+        for (_, entity) in leftTriggerCircles { entity.removeFromParent() }
+        leftTriggerCircles = [:]
+        lastLeftTriggerGesture = nil
+        for (_, entity) in rightTriggerCircles { entity.removeFromParent() }
+        rightTriggerCircles = [:]
+        lastRightTriggerGesture = nil
+        // 清除轨迹实体
+        for entity in trailEntities { entity.removeFromParent() }
+        trailEntities = []
+        trailPositions = []
     }
 
     /// Check if we already have an entity for this chirality
@@ -344,6 +377,12 @@ public class ChimetaHandgameManager {
         if trailEntities.isEmpty {
             createTrailEntities(rootEntity: rootEntity)
         }
+
+        // Create trigger circle entities (attached to rootEntity for world coords, always visible)
+        let triggerCircles = chirality == .left ? leftTriggerCircles : rightTriggerCircles
+        if triggerCircles.isEmpty {
+            createTriggerCircleEntities(chirality: chirality, rootEntity: rootEntity)
+        }
     }
 
     /// 恢复脱离场景图的骨架实体。
@@ -352,75 +391,114 @@ public class ChimetaHandgameManager {
     public func recoverDetachedEntities(rootEntity: Entity?) {
         guard let rootEntity else { return }
         self.rootEntity = rootEntity
-        guard isSkeletonVisible else { return }
-        if let left, left.parent == nil {
-            rootEntity.addChild(left)
-            setChildrenVisibility(entity: left)
+        if isSkeletonVisible {
+            if let left, left.parent == nil {
+                rootEntity.addChild(left)
+                setChildrenVisibility(entity: left)
+            }
+            if let right, right.parent == nil {
+                rootEntity.addChild(right)
+                setChildrenVisibility(entity: right)
+            }
         }
-        if let right, right.parent == nil {
-            rootEntity.addChild(right)
-            setChildrenVisibility(entity: right)
+        // 恢复触发圆实体（触发圆不受骨架显隐影响，始终需要挂载）
+        for (_, entity) in leftTriggerCircles {
+            if entity.parent == nil { rootEntity.addChild(entity) }
+        }
+        for (_, entity) in rightTriggerCircles {
+            if entity.parent == nil { rootEntity.addChild(entity) }
+        }
+        // 恢复轨迹实体
+        for entity in trailEntities {
+            if entity.parent == nil { rootEntity.addChild(entity) }
         }
     }
 
     // MARK: - Pinch Visual Feedback (using cached entity references)
 
-    @MainActor
-    func updatePinchVisualization(leftResults: [ThumbPinchGesture: PinchResult], rightResults: [ThumbPinchGesture: PinchResult]) {
-        updateHandPinchVis(cachedEntities: leftJointEntities, results: leftResults, lastHighlighted: &lastHighlightedLeft)
-        updateHandPinchVis(cachedEntities: rightJointEntities, results: rightResults, lastHighlighted: &lastHighlightedRight)
+    /// 更新校准驱动的关节基础缩放
+    /// 使用骨长归一化比例调整关节球体的视觉大小
+    func updateCalibrationScales(from profile: CalibrationProfile?) {
+        calibrationScales = [:]
+        guard let profile else { return }
+        for gesture in ThumbPinchGesture.allCases {
+            let ratio = profile.boneLengthRatios?[gesture.boneLengthKey] ?? 1.0
+            calibrationScales[gesture] = ratio
+        }
     }
 
     @MainActor
-    private func updateHandPinchVis(cachedEntities: [String: ModelEntity], results: [ThumbPinchGesture: PinchResult], lastHighlighted: inout Set<String>) {
+    func updatePinchVisualization(
+        leftResults: [ThumbPinchGesture: PinchResult],
+        rightResults: [ThumbPinchGesture: PinchResult],
+        leftPhase: GestureClassification = .none,
+        rightPhase: GestureClassification = .none
+    ) {
+        // 关节球体高亮（仅骨架可见时）
+        updateHandPinchVis(cachedEntities: leftJointEntities, results: leftResults, classification: leftPhase, lastHighlighted: &lastHighlightedLeft)
+        updateHandPinchVis(cachedEntities: rightJointEntities, results: rightResults, classification: rightPhase, lastHighlighted: &lastHighlightedRight)
+
+        // 触发圆更新（始终运行，不受骨架显隐影响）
+        updateTriggerCircles(chirality: .left, classification: leftPhase, handInfo: leftHandInfo)
+        updateTriggerCircles(chirality: .right, classification: rightPhase, handInfo: rightHandInfo)
+    }
+
+    @MainActor
+    private func updateHandPinchVis(cachedEntities: [String: ModelEntity], results: [ThumbPinchGesture: PinchResult], classification: GestureClassification, lastHighlighted: inout Set<String>) {
         guard isSkeletonVisible, !cachedEntities.isEmpty else { return }
 
-        var currentHighlighted: [String: (value: Float, pinched: Bool)] = [:]
-        for (gesture, result) in results {
-            guard result.pinchValue > 0.1 else { continue }
-            let isPinched = result.pinchValue > 0.75
-            for jointName in gesture.targetJointNames {
-                let key = jointName.codableName.rawValue
-                if let existing = currentHighlighted[key] {
-                    if result.pinchValue > existing.value {
-                        currentHighlighted[key] = (result.pinchValue, isPinched)
-                    }
-                } else {
-                    currentHighlighted[key] = (result.pinchValue, isPinched)
-                }
-            }
+        let activeGesture = classification.gesture
+        let activePhase = classification.phase
+
+        // 只高亮获胜手势的目标关节（一次只有一个手势）
+        var currentHighlighted: [String: (karmanDist: Float, gesture: ThumbPinchGesture, isActiveGesture: Bool)] = [:]
+        if let activeGesture, let result = results[activeGesture] {
+            let key = activeGesture.primaryJointName.codableName.rawValue
+            currentHighlighted[key] = (result.karmanDistance, activeGesture, true)
         }
 
         let currentKeys = Set(currentHighlighted.keys)
 
-        // Reset previously highlighted joints that are no longer highlighted
+        // 恢复不再高亮的关节到默认材质和尺寸
         for jointKey in lastHighlighted.subtracting(currentKeys) {
-            if let box = cachedEntities[jointKey] {
-                box.scale = SIMD3(repeating: 1.0)
+            if let sphere = cachedEntities[jointKey] {
+                sphere.scale = SIMD3(repeating: 1.0)
                 if let mat = defaultMaterials[jointKey] {
-                    box.model?.materials = [mat]
+                    sphere.model?.materials = [mat]
                 }
             }
         }
 
-        // Update currently highlighted joints — holographic materials
+        // 更新当前高亮关节 — 仅获胜手势的目标关节
         for (jointKey, h) in currentHighlighted {
-            if let box = cachedEntities[jointKey] {
-                let scale: Float = 1.0 + h.value * 0.8
-                box.scale = SIMD3(repeating: scale)
-                if h.pinched {
-                    if let holo = holoPinchedMaterial {
-                        box.model?.materials = [holo]
-                    } else {
-                        box.model?.materials = [greenMaterial]
-                    }
+            guard let sphere = cachedEntities[jointKey] else { continue }
+
+            let kDist = h.karmanDist
+            let prefix = Self.fingerPrefix(for: jointKey)
+            let calScale = calibrationScales[h.gesture] ?? 1.0
+
+            if activePhase == .completed {
+                // 完成闪光 — 绿色全息 + scale脉冲
+                if let holo = holoPinchedMaterial {
+                    sphere.model?.materials = [holo]
                 } else {
-                    let prefix = Self.fingerPrefix(for: jointKey)
-                    if let holoHighlight = holoHighlightMaterials[prefix] {
-                        box.model?.materials = [holoHighlight]
-                    } else {
-                        box.model?.materials = [cachedHighlightMaterial(for: h.value)]
-                    }
+                    sphere.model?.materials = [greenMaterial]
+                }
+                sphere.scale = SIMD3(repeating: 2.0 * calScale)
+            } else if kDist < 1.0 {
+                // 按下中 — 全息高亮材质，scale随深度增加
+                if let holoHighlight = holoHighlightMaterials[prefix] {
+                    sphere.model?.materials = [holoHighlight]
+                } else {
+                    sphere.model?.materials = [greenMaterial]
+                }
+                sphere.scale = SIMD3(repeating: (1.5 + (1.0 - kDist) * 0.5) * calScale)
+            } else {
+                // kDist 1.0~1.3：仅 scale 微增，保持默认材质
+                let t = max(0, (1.3 - kDist) / 0.3)
+                sphere.scale = SIMD3(repeating: (1.0 + t * 0.3) * calScale)
+                if let mat = defaultMaterials[jointKey] {
+                    sphere.model?.materials = [mat]
                 }
             }
         }
@@ -438,7 +516,7 @@ public class ChimetaHandgameManager {
 
         // Pre-generate meshes (one-time)
         if jointMesh == nil {
-            jointMesh = .generateBox(size: 0.008, cornerRadius: 0.003) // 增大圆角，玻璃质感更好
+            jointMesh = .generateSphere(radius: 0.005) // 球体 + glass材质，卡门椭圆质感
             lineMesh = .generateCylinder(height: 1.0, radius: 0.001)
         }
 
@@ -549,6 +627,170 @@ public class ChimetaHandgameManager {
                 entity.isEnabled = true
                 entity.position = pos
             }
+        }
+    }
+
+    // MARK: - Trigger Circle (Torus) Entities
+
+    /// 创建触发圆 torus 实体，附加到 rootEntity（世界空间）
+    @MainActor
+    private func createTriggerCircleEntities(chirality: HandAnchor.Chirality, rootEntity: Entity?) {
+        guard let rootEntity else { return }
+
+        // 共享 torus 网格（单位大小，通过 scale 调整实际半径）
+        if triggerCircleMesh == nil {
+            triggerCircleMesh = try? TriggerCircleMesh.generateTorus(
+                majorRadius: 1.0, minorRadius: 0.06,
+                majorSegments: 24, minorSegments: 8
+            )
+        }
+
+        // 每个手指组的触发圆材质
+        if triggerCircleMaterials.isEmpty {
+            prepareEnhancedMaterials()
+            let colorMap: [(String, Color)] = [
+                ("indexFinger",  Color(red: 0.95, green: 0.45, blue: 0.65)),
+                ("middleFinger", Color(red: 0.40, green: 0.85, blue: 0.55)),
+                ("ringFinger",   Color(red: 0.95, green: 0.75, blue: 0.30)),
+                ("littleFinger", Color(red: 1.0, green: 0.6, blue: 0.3)),
+            ]
+            for (prefix, color) in colorMap {
+                triggerCircleMaterials[prefix] = MaterialFactory.holographic(color: color, intensity: 1.2)
+            }
+        }
+
+        guard let mesh = triggerCircleMesh else { return }
+
+        var cache: [ThumbPinchGesture: ModelEntity] = [:]
+        for gesture in ThumbPinchGesture.allCases {
+            let jointKey = gesture.primaryJointName.codableName.rawValue
+            let prefix = Self.fingerPrefix(for: jointKey)
+            let material: any RealityKit.Material = triggerCircleMaterials[prefix] ?? UnlitMaterial(color: .cyan)
+
+            let circle = ModelEntity(mesh: mesh, materials: [material])
+            circle.name = "trigger-\(chirality == .left ? "L" : "R")-\(gesture.boneLengthKey)"
+            circle.isEnabled = false
+            rootEntity.addChild(circle)
+            cache[gesture] = circle
+        }
+
+        if chirality == .left {
+            leftTriggerCircles = cache
+        } else {
+            rightTriggerCircles = cache
+        }
+    }
+
+    /// 计算触发圆半径：与判定逻辑同步
+    /// - 食指/中指/无名指：指尖×0.65, 指中×0.75, 指根×0.95
+    /// - 小指：指尖/指中/指根 = 骨段长度
+    private func triggerCircleRadius(for gesture: ThumbPinchGesture, handInfo: CHHandInfo) -> Float {
+        let finger: String
+        switch gesture.fingerGroup {
+        case .index: finger = "index"
+        case .middle: finger = "middle"
+        case .ring: finger = "ring"
+        case .little: finger = "little"
+        }
+
+        let key: String
+        switch gesture.jointLevel {
+        case .tip:
+            key = "\(finger)_tip"
+        case .intermediate, .knuckle:
+            key = "\(finger)_intermediate"
+        }
+
+        let boneLength: Float
+        if let lengths = measuredBoneLengths, let length = lengths[key] {
+            boneLength = length
+        } else {
+            boneLength = ThumbPinchGesture.referenceBoneLengths[key] ?? 0.020
+        }
+
+        // 小指不缩放
+        if gesture.fingerGroup == .little {
+            return boneLength
+        }
+
+        // 食指/中指/无名指使用不同系数
+        let multiplier: Float
+        switch gesture.jointLevel {
+        case .tip: multiplier = 0.65
+        case .intermediate: multiplier = 0.75
+        case .knuckle: multiplier = 0.95
+        }
+
+        return boneLength * multiplier
+    }
+
+    /// 将关节局部坐标转换为世界坐标
+    private func jointWorldPosition(jointPos: SIMD3<Float>, handTransform: simd_float4x4) -> SIMD3<Float> {
+        let col0 = handTransform.columns.0
+        let col1 = handTransform.columns.1
+        let col2 = handTransform.columns.2
+        let col3 = handTransform.columns.3
+        return SIMD3<Float>(
+            col3.x + col0.x * jointPos.x + col1.x * jointPos.y + col2.x * jointPos.z,
+            col3.y + col0.y * jointPos.x + col1.y * jointPos.y + col2.y * jointPos.z,
+            col3.z + col0.z * jointPos.x + col1.z * jointPos.y + col2.z * jointPos.z
+        )
+    }
+
+    /// 更新触发圆显隐和位置
+    @MainActor
+    func updateTriggerCircles(
+        chirality: HandAnchor.Chirality,
+        classification: GestureClassification,
+        handInfo: CHHandInfo?
+    ) {
+        let circles = chirality == .left ? leftTriggerCircles : rightTriggerCircles
+        guard !circles.isEmpty else { return }
+
+        let activeGesture = classification.isPressing ? classification.gesture : nil
+
+        // 隐藏所有非活跃手势的圆
+        for (gesture, entity) in circles {
+            if gesture != activeGesture {
+                entity.isEnabled = false
+            }
+        }
+
+        // 显示活跃手势的触发圆
+        if let gesture = activeGesture,
+           let circle = circles[gesture],
+           let handInfo {
+            let radius = triggerCircleRadius(for: gesture, handInfo: handInfo)
+
+            // 位置：关节的世界空间坐标
+            guard let joint = handInfo.allJoints[gesture.primaryJointName] else { return }
+            let worldPos = jointWorldPosition(jointPos: joint.position, handTransform: handInfo.transform)
+            circle.position = worldPos
+
+            // 朝向：沿骨骼方向（torus 法线 = 骨骼方向）
+            let seg = gesture.boneSegmentJoints
+            if let parentJoint = handInfo.allJoints[seg.parent],
+               let childJoint = handInfo.allJoints[seg.child] {
+                // 骨骼方向：局部空间 → 世界空间
+                let localBoneDir = simd_normalize(childJoint.position - parentJoint.position)
+                let handRotation = simd_quatf(handInfo.transform)
+                let worldBoneDir = handRotation.act(localBoneDir)
+                let up = SIMD3<Float>(0, 1, 0)
+                if abs(simd_dot(worldBoneDir, up)) < 0.999 {
+                    circle.orientation = simd_quatf(from: up, to: worldBoneDir)
+                }
+            }
+
+            // 缩放：torus 的 majorRadius=1.0，缩放到实际半径
+            circle.scale = SIMD3(repeating: radius)
+            circle.isEnabled = true
+        }
+
+        // 跟踪上一帧的触发手势（用于外部检测离开事件）
+        if chirality == .left {
+            lastLeftTriggerGesture = activeGesture
+        } else {
+            lastRightTriggerGesture = activeGesture
         }
     }
 

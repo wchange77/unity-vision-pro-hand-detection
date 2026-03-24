@@ -2,8 +2,8 @@
 //  CalibrationView.swift
 //  handtyping
 //
-//  ML-driven quick calibration — free-form gesture collection
-//  powered by the pre-trained HandGesture ML model.
+//  Quick calibration — free-form gesture collection
+//  for rule-based detection (ellipsoid distance + disambiguation).
 //
 
 import SwiftUI
@@ -18,14 +18,24 @@ enum CalibrationState: Equatable {
     case profileList   // Manage saved profiles
 }
 
+/// 单个手势的录制阶段
+enum CalibrationRecordingPhase: Equatable {
+    case naturalGesture  // 自然手势录制（用户做一次完整按下-抬起）
+}
+
 /// Per-gesture calibration status
 enum GestureCalibrationStatus: Equatable {
     case pending
-    case recording(startTime: TimeInterval)
+    case recording(startTime: TimeInterval, phase: CalibrationRecordingPhase)
     case completed(sampleCount: Int)
 
     var isCompleted: Bool {
         if case .completed = self { return true }
+        return false
+    }
+
+    var isRecording: Bool {
+        if case .recording = self { return true }
         return false
     }
 }
@@ -47,7 +57,15 @@ struct CalibrationView: View {
     }()
 
     @State private var collectedSamples: [Int: [Float]] = [:]
+    @State private var collectedReleaseSamples: [Int: [Float]] = [:]
     @State private var collectedSnapshots: [Int: [CHHandJsonModel]] = [:]
+    @State private var collectedTimestamps: [Int: [Double]] = [:]
+    @State private var collectedNeighborDists: [Int: [[Float]]] = [:]
+    @State private var boneLengthRatios: [String: Float]?
+    @State private var measuredBoneLengths: [String: Float]?
+    /// 每次手势录制时累积的骨长采样（key → [Float]），最终取均值
+    @State private var accumulatedBoneLengths: [String: [Float]] = [:]
+    @State private var accumulatedBoneLengthRatios: [String: [Float]] = [:]
     @State private var currentGestureIndex: Int = 0
     @State private var recordingStartTime: TimeInterval = 0
     @State private var preparationStartTime: TimeInterval = 0
@@ -59,9 +77,9 @@ struct CalibrationView: View {
     @State private var profileName: String = ""
     @State private var savedProfiles: [CalibrationProfile] = []
 
-    private let recordDuration: TimeInterval = 2.0
-    private let preparationDuration: TimeInterval = 3.0
-    private let initialCountdownDuration: TimeInterval = 5.0
+    private let recordDuration: TimeInterval = 4.0    // 自然手势录制时长（足够完成一次按下-抬起）
+    private let preparationDuration: TimeInterval = 2.0
+    private let initialCountdownDuration: TimeInterval = 3.0  // 3-2-1倒计时
     private let minSampleCount: Int = 15
     private let autoReturnDelay: TimeInterval = 3.0
 
@@ -126,6 +144,8 @@ struct CalibrationView: View {
             savedProfiles = CalibrationProfile.listAll()
             // 自动开始校准（跳过 welcome 页面）
             if state == .welcome && model.turnOnImmersiveSpace {
+                // 校准期间使用默认参数（清除旧校准数据）
+                enterCalibrationMode()
                 showInitialCountdown = true
                 initialCountdownStartTime = CACurrentMediaTime()
                 currentGestureIndex = 0
@@ -133,9 +153,12 @@ struct CalibrationView: View {
             }
         }
         .onDisappear {
+            // 清理所有校准状态
             if state == .recording {
                 model.stopCalibrationRecording()
             }
+            model.isCalibrating = false
+            model.calibratingGesture = nil
         }
     }
 
@@ -162,6 +185,8 @@ struct CalibrationView: View {
                     model.stopCalibrationRecording()
                     state = .welcome
                     resetCalibration()
+                    // 恢复之前的活跃校准配置
+                    model.loadActiveCalibration()
                 }
                 .buttonStyle(CyberpunkButtonStyle(color: DesignTokens.Colors.error))
 
@@ -210,15 +235,15 @@ struct CalibrationView: View {
                 .font(.system(size: 24, weight: .bold, design: .monospaced))
                 .foregroundColor(DesignTokens.Colors.accentBlue)
 
-            Text("为每个手势收集距离和姿态参考数据\n运行时将结合ML模型进行融合检测")
+            Text("为每个手势收集距离和姿态参考数据\n纯规则检测（椭球体距离+消歧+余弦相似度）")
                 .font(.system(size: 14, design: .monospaced))
                 .foregroundColor(.gray)
                 .multilineTextAlignment(.center)
 
             VStack(alignment: .leading, spacing: 6) {
-                infoRow("1", "点击手势格子开始录制")
-                infoRow("2", "做对应手势并保持2秒")
-                infoRow("3", "系统收集距离和姿态数据")
+                infoRow("1", "3-2-1 倒计时后开始录制")
+                infoRow("2", "做对应手势：自然按下再抬起")
+                infoRow("3", "系统自动检测手势并分析参数")
                 infoRow("4", "完成全部12个手势")
             }
             .padding()
@@ -226,10 +251,10 @@ struct CalibrationView: View {
 
             if !model.turnOnImmersiveSpace {
                 warningBadge(icon: "exclamationmark.triangle", text: "等待手部追踪启动...")
-            } else if !model.mlTrainer.isModelLoaded {
-                warningBadge(icon: "exclamationmark.triangle", text: "ML 模型未加载，请确保 HandGesture.mlmodelc 已内置")
             } else {
                 Button(action: {
+                    // 校准期间使用默认参数（清除旧校准数据）
+                    enterCalibrationMode()
                     showInitialCountdown = true
                     initialCountdownStartTime = CACurrentMediaTime()
                     currentGestureIndex = 0
@@ -290,6 +315,7 @@ struct CalibrationView: View {
                         .font(.system(size: 32, weight: .bold, design: .monospaced))
                         .foregroundColor(DesignTokens.Colors.finger(for: gesture.fingerGroup))
                         .neonGlow(color: DesignTokens.Colors.finger(for: gesture.fingerGroup), radius: 8)
+                }
 
             if showInitialCountdown {
                 let elapsed = CACurrentMediaTime() - initialCountdownStartTime
@@ -297,7 +323,7 @@ struct CalibrationView: View {
                 let countdown = Int(ceil(remaining))
 
                 countdownCard(
-                    title: "准备开始校准",
+                    title: "请准备好双手",
                     countdown: "\(countdown)",
                     color: DesignTokens.Colors.accentBlue
                 )
@@ -311,41 +337,13 @@ struct CalibrationView: View {
                     countdown: "\(countdown)",
                     color: DesignTokens.Colors.warning
                 )
-            } else if let gesture = currentGesture, case .recording(let startTime) = gestureStatuses[gesture] {
-                let elapsed = CACurrentMediaTime() - startTime
-                let remaining = max(0, recordDuration - elapsed)
-
-                VStack(spacing: 12) {
-                    Text("录制中...")
-                        .font(.system(size: 18, weight: .bold, design: .monospaced))
-                        .foregroundColor(DesignTokens.Colors.error)
-
-                    Text(String(format: "%.1fs", remaining))
-                        .font(.system(size: 36, weight: .bold, design: .monospaced))
-                        .foregroundColor(DesignTokens.Colors.error)
-
-                    CalibrationWaveView(
-                        samples: model.calibrationSamples,
-                        color: DesignTokens.Colors.finger(for: gesture.fingerGroup),
-                        thresholdMin: gesture.pinchConfig.minDistance,
-                        thresholdMax: gesture.pinchConfig.maxDistance
-                    )
-                    .frame(height: 100)
-                }
-                .padding()
-                .frostedGlass(
-                    intensity: 0.5,
-                    cornerRadius: DesignTokens.Spacing.CornerRadius.medium,
-                    borderWidth: 2
-                )
-                .neonGlow(color: DesignTokens.Colors.error, radius: 6, intensity: 0.4, animated: true)
-                .accessibilityLabel("录制中，剩余\(String(format: "%.0f", remaining))秒")
+            } else if let gesture = currentGesture, case .recording(let startTime, let phase) = gestureStatuses[gesture] {
+                recordingPhaseView(gesture: gesture, startTime: startTime, phase: phase)
             } else if currentGesture != nil {
                 Text("等待检测手势...")
                     .font(.system(size: 16, design: .monospaced))
                     .foregroundColor(.gray)
             }
-                }
             }
         }
         .padding()
@@ -370,6 +368,63 @@ struct CalibrationView: View {
         )
         .neonGlow(color: color, radius: 6, intensity: 0.3, animated: true)
         .accessibilityLabel("\(title)，\(countdown)秒")
+    }
+
+    private func phaseIndicator(label: String, isActive: Bool, isDone: Bool) -> some View {
+        HStack(spacing: 4) {
+            if isDone {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundColor(DesignTokens.Colors.success)
+            } else if isActive {
+                Circle()
+                    .fill(DesignTokens.Colors.accentBlue)
+                    .frame(width: 8, height: 8)
+            } else {
+                Circle()
+                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                    .frame(width: 8, height: 8)
+            }
+            Text(label)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(isActive ? DesignTokens.Colors.accentBlue : (isDone ? DesignTokens.Colors.success : .gray))
+        }
+    }
+
+    @ViewBuilder
+    private func recordingPhaseView(gesture: ThumbPinchGesture, startTime: TimeInterval, phase: CalibrationRecordingPhase) -> some View {
+        let elapsed = CACurrentMediaTime() - startTime
+        let remaining = max(0, recordDuration - elapsed)
+        let color = DesignTokens.Colors.finger(for: gesture.fingerGroup)
+
+        VStack(spacing: 12) {
+            Text("自然做一次按下→抬起")
+                .font(.system(size: 18, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+
+            Text(String(format: "%.1fs", remaining))
+                .font(.system(size: 36, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+
+            CalibrationWaveView(
+                samples: model.calibrationSamples,
+                color: color,
+                thresholdMin: gesture.pinchConfig.minDistance,
+                thresholdMax: gesture.pinchConfig.maxDistance
+            )
+            .frame(height: 100)
+
+            Text("按下 → 抬起（系统自动识别）")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundColor(.gray)
+        }
+        .padding()
+        .frostedGlass(
+            intensity: 0.5,
+            cornerRadius: DesignTokens.Spacing.CornerRadius.medium,
+            borderWidth: 2
+        )
+        .neonGlow(color: color, radius: 6, intensity: 0.4, animated: true)
+        .accessibilityLabel("录制中，剩余\(String(format: "%.0f", remaining))秒")
     }
 
     // MARK: - Progress Wheel
@@ -583,8 +638,6 @@ struct CalibrationView: View {
                 summaryItem(title: "全部手势", value: allCompleted ? "全部完成" : "部分", color: allCompleted ? DesignTokens.Colors.success : DesignTokens.Colors.warning)
             }
 
-            mlTrainingStatusView
-
             if autoReturnStartTime > 0 {
                 let elapsed = CACurrentMediaTime() - autoReturnStartTime
                 let remaining = max(0, autoReturnDelay - elapsed)
@@ -615,68 +668,6 @@ struct CalibrationView: View {
             RoundedRectangle(cornerRadius: 6)
                 .stroke(color.opacity(0.3), lineWidth: 0.5)
         )
-    }
-
-    // MARK: - ML Training Status
-
-    private var mlTrainingStatusView: some View {
-        HStack(spacing: 8) {
-            switch model.mlTrainingState {
-            case .idle:
-                Image(systemName: "brain")
-                    .foregroundColor(.gray)
-                Text("ML模型：未训练")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(.gray)
-            case .preparing:
-                ProgressView()
-                    .scaleEffect(0.7)
-                Text("ML模型：准备训练数据...")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.warning)
-            case .training(let progress):
-                ProgressView()
-                    .scaleEffect(0.7)
-                Text(String(format: "ML模型：训练中 %.0f%%", progress * 100))
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.accentBlue)
-            case .completed(let accuracy):
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundColor(DesignTokens.Colors.success)
-                Text(String(format: "ML模型：训练完成 (准确率: %.1f%%)", accuracy * 100))
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.success)
-            case .failed(let message):
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(DesignTokens.Colors.error)
-                Text("ML模型：训练失败 - \(message)")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.error)
-                    .lineLimit(2)
-            case .skippedRuleBased:
-                Image(systemName: "checkmark.seal.fill")
-                    .foregroundColor(DesignTokens.Colors.success)
-                Text("使用规则检测（距离+消歧+余弦相似度）")
-                    .font(DesignTokens.Typography.mono)
-                    .foregroundColor(DesignTokens.Colors.success)
-            }
-        }
-        .padding(.horizontal, DesignTokens.Spacing.md)
-        .padding(.vertical, DesignTokens.Spacing.xs)
-        .glassMaterial(
-            tint: mlTrainingBorderColor,
-            cornerRadius: DesignTokens.Spacing.CornerRadius.small
-        )
-    }
-
-    private var mlTrainingBorderColor: Color {
-        switch model.mlTrainingState {
-        case .idle: return .gray
-        case .preparing: return DesignTokens.Colors.warning
-        case .training: return DesignTokens.Colors.accentBlue
-        case .completed, .skippedRuleBased: return DesignTokens.Colors.success
-        case .failed: return DesignTokens.Colors.error
-        }
     }
 
     // MARK: - Profile List
@@ -810,39 +801,47 @@ struct CalibrationView: View {
             if result.samples.count >= minSampleCount {
                 collectedSamples[gesture.rawValue] = result.samples
                 collectedSnapshots[gesture.rawValue] = result.snapshots
+                collectedTimestamps[gesture.rawValue] = result.timestamps
+                collectedNeighborDists[gesture.rawValue] = result.neighborDists
                 gestureStatuses[gesture] = .completed(sampleCount: result.samples.count)
             }
         }
 
         let samples = collectedSamples.compactMap { (rawValue, floats) -> CalibrationSample? in
             guard !floats.isEmpty else { return nil }
-            return CalibrationSample(
+            var sample = CalibrationSample(
                 gestureRawValue: rawValue,
                 samples: floats,
-                handSnapshots: collectedSnapshots[rawValue] ?? []
+                releaseSamples: collectedReleaseSamples[rawValue] ?? [],
+                handSnapshots: collectedSnapshots[rawValue] ?? [],
+                timestamps: collectedTimestamps[rawValue] ?? [],
+                neighborDistances: collectedNeighborDists[rawValue] ?? []
             )
+            // V形自动分析
+            if let vShape = CalibrationAnalyzer.detectVShape(
+                distances: sample.samples,
+                timestamps: sample.timestamps
+            ) {
+                CalibrationAnalyzer.enrichSample(&sample, with: vShape)
+            }
+            return sample
         }
 
         guard !samples.isEmpty else { return }
 
+        // 从累积的骨长采样中计算最终均值
+        finalizeBoneLengths()
+
         let autoName = CalibrationProfile.nextAutoName()
         profileName = autoName
-        var profile = CalibrationProfile(name: autoName, samples: samples)
+        let profile = CalibrationProfile(name: autoName, samples: samples, boneLengthRatios: boneLengthRatios, measuredBoneLengths: measuredBoneLengths)
         try? profile.save()
         CalibrationProfile.saveActiveProfileId(profile.id)
         model.activeProfile = profile
-        model.referenceHandInfos = profile.allReferenceHandInfos()
 
-        Task {
-            let modelURL = await model.mlTrainer.train(profile: profile)
-            await MainActor.run {
-                model.mlTrainingState = model.mlTrainer.state
-                if let url = modelURL {
-                    profile.mlModelFileName = url.lastPathComponent
-                    try? profile.save()
-                    model.activeProfile = profile
-                }
-            }
+        // 校準後立即更新3D關節球體的視覺半徑
+        Task { @MainActor in
+            model.updateVisualRadii(from: profile)
         }
 
         state = .complete
@@ -851,7 +850,12 @@ struct CalibrationView: View {
 
     private func resetCalibration() {
         collectedSamples = [:]
+        collectedReleaseSamples = [:]
         collectedSnapshots = [:]
+        collectedTimestamps = [:]
+        collectedNeighborDists = [:]
+        accumulatedBoneLengths = [:]
+        accumulatedBoneLengthRatios = [:]
         currentGestureIndex = 0
         profileName = ""
         for g in ThumbPinchGesture.allCases {
@@ -859,10 +863,48 @@ struct CalibrationView: View {
         }
     }
 
+    /// 进入校准模式：临时清除活跃校准数据，使用默认参数检测
+    private func enterCalibrationMode() {
+        model.activeProfile = nil
+        model.latestHandTracking.measuredBoneLengths = nil
+        resetCalibration()
+    }
+
     private func startRecording(gesture: ThumbPinchGesture) {
         let now = CACurrentMediaTime()
-        gestureStatuses[gesture] = .recording(startTime: now)
+        gestureStatuses[gesture] = .recording(startTime: now, phase: .naturalGesture)
         model.startCalibrationRecording(gesture: gesture)
+    }
+
+    /// 采集骨长：从当前手部追踪数据中计算骨长，累积到全局采样中
+    /// 每次手势录制结束时调用，最终取均值
+    private func accumulateBoneLengthsFromRecording() {
+        let handInfo = model.rightHandInfo ?? model.leftHandInfo
+        guard let handInfo else { return }
+        let lengths = ThumbPinchGesture.computeActualBoneLengths(from: handInfo)
+        let ratios = ThumbPinchGesture.computeBoneLengthRatios(from: handInfo)
+        for (key, value) in lengths {
+            accumulatedBoneLengths[key, default: []].append(value)
+        }
+        for (key, value) in ratios {
+            accumulatedBoneLengthRatios[key, default: []].append(value)
+        }
+    }
+
+    /// 从累积的骨长采样中计算最终均值
+    private func finalizeBoneLengths() {
+        var finalLengths: [String: Float] = [:]
+        for (key, values) in accumulatedBoneLengths where !values.isEmpty {
+            finalLengths[key] = values.reduce(0, +) / Float(values.count)
+        }
+        measuredBoneLengths = finalLengths.isEmpty ? nil : finalLengths
+
+        var finalRatios: [String: Float] = [:]
+        for (key, values) in accumulatedBoneLengthRatios where !values.isEmpty {
+            finalRatios[key] = values.reduce(0, +) / Float(values.count)
+        }
+        boneLengthRatios = finalRatios.isEmpty ? nil : finalRatios
+        print("[Calibration] 骨长采集完成：\(accumulatedBoneLengths.count) 个骨段，\(accumulatedBoneLengths.values.first?.count ?? 0) 次采样取均值")
     }
 
     private func checkRecordingProgress() {
@@ -870,6 +912,7 @@ struct CalibrationView: View {
             let elapsed = CACurrentMediaTime() - initialCountdownStartTime
             if elapsed >= initialCountdownDuration {
                 showInitialCountdown = false
+                // 骨长将在每次手势录制结束时累积采集
                 isInPreparation = true
                 preparationStartTime = CACurrentMediaTime()
             }
@@ -888,20 +931,32 @@ struct CalibrationView: View {
         }
 
         guard let gesture = currentGesture,
-              case .recording(let startTime) = gestureStatuses[gesture] else {
+              case .recording(let startTime, _) = gestureStatuses[gesture] else {
             return
         }
 
+        // 单阶段自然手势录制
         let elapsed = CACurrentMediaTime() - startTime
         if elapsed >= recordDuration {
-            let (samples, snapshots) = model.stopCalibrationRecording()
+            let result = model.stopCalibrationRecording()
+            if result.samples.count >= minSampleCount {
+                collectedSamples[gesture.rawValue] = result.samples
+                collectedSnapshots[gesture.rawValue] = result.snapshots
+                collectedTimestamps[gesture.rawValue] = result.timestamps
+                collectedNeighborDists[gesture.rawValue] = result.neighborDists
 
-            let isValid = samples.count >= minSampleCount
+                // V形分析自动提取抬起采样
+                if let vShape = CalibrationAnalyzer.detectVShape(
+                    distances: result.samples,
+                    timestamps: result.timestamps
+                ) {
+                    collectedReleaseSamples[gesture.rawValue] = vShape.releaseSamples
+                }
 
-            if isValid {
-                collectedSamples[gesture.rawValue] = samples
-                collectedSnapshots[gesture.rawValue] = snapshots
-                gestureStatuses[gesture] = .completed(sampleCount: samples.count)
+                // 从本次录制的 hand infos 累积骨长数据
+                accumulateBoneLengthsFromRecording()
+
+                gestureStatuses[gesture] = .completed(sampleCount: result.samples.count)
 
                 currentGestureIndex += 1
                 if currentGestureIndex >= ThumbPinchGesture.allCases.count {

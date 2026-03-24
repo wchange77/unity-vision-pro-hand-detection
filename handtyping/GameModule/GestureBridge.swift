@@ -41,12 +41,14 @@ struct UnifiedGestureState: Sendable {
     let frameworkGesture: FrameworkGestureKind?
     let navSemantic: GestureNavSemantic?
     let confidence: Float
+    let phase: GesturePhase?
 
     static let empty = UnifiedGestureState(
         thumbPinch: .none,
         frameworkGesture: nil,
         navSemantic: nil,
-        confidence: 0
+        confidence: 0,
+        phase: nil
     )
 }
 
@@ -91,9 +93,6 @@ extension GameNavEvent {
 
 /// 集中管理手势检测阈值和行为参数
 struct GestureConfig: Sendable {
-    let mlThreshold: Float
-    let ruleThreshold: Float
-    let fusionRuleThreshold: Float
     let fastConfirmThreshold: Float
     let smoothingWindow: Int
     let navDebounce: TimeInterval
@@ -101,23 +100,17 @@ struct GestureConfig: Sendable {
 
     /// 默认配置（平衡准确性和响应性）
     static let `default` = GestureConfig(
-        mlThreshold: 0.45,
-        ruleThreshold: 0.75,
-        fusionRuleThreshold: 0.60,
-        fastConfirmThreshold: 0.82,
+        fastConfirmThreshold: 0.65,
         smoothingWindow: 2,
-        navDebounce: 0.35,
+        navDebounce: 0.15,
         quickBackEnabled: true
     )
 
     /// 快速响应配置（游戏场景，牺牲少量准确性换取更低延迟）
     static let responsive = GestureConfig(
-        mlThreshold: 0.40,
-        ruleThreshold: 0.60,
-        fusionRuleThreshold: 0.50,
-        fastConfirmThreshold: 0.80,
+        fastConfirmThreshold: 0.50,
         smoothingWindow: 1,
-        navDebounce: 0.35,
+        navDebounce: 0.12,
         quickBackEnabled: true
     )
 }
