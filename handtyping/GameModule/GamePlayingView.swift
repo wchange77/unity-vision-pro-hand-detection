@@ -13,7 +13,7 @@ struct GamePlayingView: View {
 
     var body: some View {
         VStack(spacing: DesignTokens.Spacing.md) {
-            // 标题栏
+            // 标题栏 — VolumetricText 3D 效果
             VStack(alignment: .leading, spacing: 4) {
                 Text("手势测试")
                     .font(.system(size: 22, weight: .bold, design: .rounded))

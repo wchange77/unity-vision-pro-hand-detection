@@ -10,6 +10,7 @@
 
 import SwiftUI
 import ARKit
+import AudioToolbox
 
 // MARK: - 九宫格键盘映射
 
@@ -27,17 +28,20 @@ enum TypingGameState {
     case gameOver
 }
 
+// MARK: - 按键反馈状态
+
+enum KeyFlash {
+    case idle
+    case correct
+    case wrong
+}
+
 // MARK: - 游戏管理器
 
 @Observable
 final class TypingGameManager {
 
-    // 九宫格T9键盘布局（与别踩白块相同的九宫格映射）
-    // 右手视角：从右到左 = 食指→中指→无名指
-    // 视觉列从左到右 = 无名指, 中指, 食指
-    // 行0(指尖): ringTip, middleTip, indexTip
-    // 行1(中节): ringIntermediateTip, middleIntermediateTip, indexIntermediateTip
-    // 行2(近端): ringKnuckle, middleKnuckle, indexKnuckle
+    // 九宫格T9键盘布局
     static let t9Keys: [T9Key] = [
         T9Key(index: 0, letters: ["a", "b", "c"], gesture: .ringTip),
         T9Key(index: 1, letters: ["d", "e", "f"], gesture: .middleTip),
@@ -47,7 +51,7 @@ final class TypingGameManager {
         T9Key(index: 5, letters: ["p", "q", "r", "s"], gesture: .indexIntermediateTip),
         T9Key(index: 6, letters: ["t", "u", "v"], gesture: .ringKnuckle),
         T9Key(index: 7, letters: ["w", "x", "y", "z"], gesture: .middleKnuckle),
-        T9Key(index: 8, letters: [" "], gesture: .indexKnuckle),  // 空格
+        T9Key(index: 8, letters: [" "], gesture: .indexKnuckle),
     ]
 
     /// 反查表：字母 → 所属区域 key index
@@ -65,11 +69,8 @@ final class TypingGameManager {
 
     // 单词库（从易到难）
     private let wordLists: [[String]] = [
-        // 简单（3-4字母）
         ["cat", "dog", "run", "sun", "hat", "pen", "cup", "box", "red", "big"],
-        // 中等（5-6字母）
         ["apple", "house", "water", "happy", "green", "table", "phone", "music"],
-        // 困难（7+字母）
         ["computer", "keyboard", "elephant", "beautiful", "wonderful", "important"]
     ]
 
@@ -79,47 +80,43 @@ final class TypingGameManager {
     var lives: Int = 3
 
     var currentWord: String = ""
-    /// 当前需要输入的字母位置（字母索引）
     var currentCharIndex: Int = 0
     var wordStartTime: TimeInterval = 0
     var lastWordTime: TimeInterval = 0
-    /// 最近一次按键反馈（用于高亮）
-    var lastTappedKeyIndex: Int? = nil
-    /// 错误反馈：按错时闪烁
-    var showError: Bool = false
-    /// 游戏开始时间
     var gameStartTime: TimeInterval = 0
+
+    /// 按键闪烁状态（每个键独立）
+    var keyFlash: [Int: KeyFlash] = [:]
+    /// 连击计数
+    var combo: Int = 0
+    /// 最大连击
+    var maxCombo: Int = 0
+    /// 完成的单词数
+    var wordsCompleted: Int = 0
 
     private var difficulty: Int = 0
 
     @ObservationIgnored
-    private var wasPinched: [ThumbPinchGesture: Bool] = [:]
-    @ObservationIgnored
-    private var lastTapTime: [ThumbPinchGesture: TimeInterval] = [:]
-    private let tapCooldown: TimeInterval = 0.25
+    private var wasPressing: [ThumbPinchGesture: Bool] = [:]
 
     /// 新手保护期时长（秒）
     private let protectionDuration: Double = 20.0
 
-    /// 是否在新手保护期内
     var isProtected: Bool {
         guard gameState == .playing else { return false }
         return CACurrentMediaTime() - gameStartTime < protectionDuration
     }
 
-    /// 保护期剩余时间
     var protectionRemaining: Double {
         guard isProtected else { return 0 }
         return max(0, protectionDuration - (CACurrentMediaTime() - gameStartTime))
     }
 
-    /// 当前目标字母
     var currentTargetChar: Character? {
         guard currentCharIndex < currentWord.count else { return nil }
         return currentWord[currentWord.index(currentWord.startIndex, offsetBy: currentCharIndex)]
     }
 
-    /// 当前目标字母所在的 key index
     var currentTargetKeyIndex: Int? {
         guard let ch = currentTargetChar else { return nil }
         return Self.letterToKeyIndex[ch]
@@ -130,12 +127,13 @@ final class TypingGameManager {
         lives = 3
         difficulty = 0
         currentCharIndex = 0
+        combo = 0
+        maxCombo = 0
+        wordsCompleted = 0
         gameState = .playing
         gameStartTime = CACurrentMediaTime()
-        wasPinched = [:]
-        lastTapTime = [:]
-        lastTappedKeyIndex = nil
-        showError = false
+        wasPressing = [:]
+        keyFlash = [:]
         nextWord()
     }
 
@@ -157,83 +155,84 @@ final class TypingGameManager {
         currentWord = list.randomElement() ?? "cat"
         currentCharIndex = 0
         wordStartTime = CACurrentMediaTime()
-        lastTappedKeyIndex = nil
-        showError = false
-    }
-
-    /// 跳过当前单词（扣命）
-    func skipWord() {
-        loseLife()
-        if gameState == .playing {
-            nextWord()
-        }
     }
 
     private func loseLife() {
         lives -= 1
-        showError = true
+        combo = 0
         if lives <= 0 {
             endGame()
         }
     }
 
-    func processPinchResults(_ results: [ThumbPinchGesture: PinchResult], classification: GestureClassification) {
+    // MARK: - 核心：直接从分类结果检测按键（零延迟）
+
+    func processClassification(_ classification: GestureClassification) {
         guard gameState == .playing else { return }
 
-        guard let classifiedGesture = classification.gesture,
-              classification.isPressing,
-              classification.confidence > 0.1 else {
-            for gesture in Self.t9Keys.map({ $0.gesture }) {
-                wasPinched[gesture] = false
-            }
+        let gesture = classification.gesture
+        let isPressing = classification.isPressing
+
+        // 无手势时重置所有按下状态
+        guard let gesture, isPressing else {
+            wasPressing.removeAll()
             return
         }
 
-        for key in Self.t9Keys where key.gesture != classifiedGesture {
-            wasPinched[key.gesture] = false
+        // 只响应T9映射内的手势
+        guard let key = Self.t9Keys.first(where: { $0.gesture == gesture }) else {
+            return
         }
 
-        let wasDown = wasPinched[classifiedGesture] ?? false
-        if !wasDown {
-            let now = CACurrentMediaTime()
-            let lastTap = lastTapTime[classifiedGesture] ?? 0
-            if now - lastTap >= tapCooldown {
-                handleKeyTap(gesture: classifiedGesture)
-                lastTapTime[classifiedGesture] = now
-            }
+        // 边沿检测：从未按下→按下才触发
+        let wasDown = wasPressing[gesture] ?? false
+        // 其他手势释放
+        for g in wasPressing.keys where g != gesture {
+            wasPressing[g] = false
         }
-        wasPinched[classifiedGesture] = true
+        wasPressing[gesture] = true
+
+        guard !wasDown else { return }
+
+        // 触发按键
+        handleKeyTap(key: key)
     }
 
-    private func handleKeyTap(gesture: ThumbPinchGesture) {
-        guard let key = Self.t9Keys.first(where: { $0.gesture == gesture }) else { return }
+    private func handleKeyTap(key: T9Key) {
         guard currentCharIndex < currentWord.count else { return }
 
-        lastTappedKeyIndex = key.index
-        showError = false
-
-        // 区域直接输入：检查按下的区域是否包含当前目标字母
         let targetChar = currentWord[currentWord.index(currentWord.startIndex, offsetBy: currentCharIndex)]
         let targetKeyIndex = Self.letterToKeyIndex[targetChar]
 
         if targetKeyIndex == key.index {
-            // 正确！前进到下一个字母
+            // 正确
             currentCharIndex += 1
+            combo += 1
+            if combo > maxCombo { maxCombo = combo }
+            keyFlash[key.index] = .correct
+            AudioServicesPlaySystemSound(1104)
 
-            // 检查是否完成整个单词
             if currentCharIndex >= currentWord.count {
+                // 单词完成
                 let elapsed = CACurrentMediaTime() - wordStartTime
                 lastWordTime = elapsed
-                score += 10
+                wordsCompleted += 1
+                // 连击加分
+                let comboBonus = min(combo / 5, 5)
+                score += 10 + comboBonus
+                AudioServicesPlaySystemSound(1025)
                 if score % 30 == 0 && difficulty < wordLists.count - 1 {
                     difficulty += 1
                 }
                 nextWord()
             }
         } else {
-            // 按错区域：保护期内不扣命
+            // 错误
+            keyFlash[key.index] = .wrong
+            combo = 0
+            AudioServicesPlaySystemSound(1053)
             if isProtected {
-                showError = true
+                // 保护期只闪烁不扣命
             } else {
                 loseLife()
                 if gameState == .playing {
@@ -241,6 +240,11 @@ final class TypingGameManager {
                 }
             }
         }
+    }
+
+    /// 清除按键闪烁（由视图定时调用）
+    func clearFlash(_ keyIndex: Int) {
+        keyFlash[keyIndex] = nil
     }
 }
 
@@ -266,16 +270,17 @@ struct TypingRainView: View {
         }
         .padding(DesignTokens.Spacing.lg)
         .frame(minWidth: 700, minHeight: 520)
-        .onChange(of: session.navRouter.latestEvent) { _, event in
-            guard let event else { return }
-            defer { session.navRouter.consumeEvent() }
+        .onChange(of: session.currentGesture) { _, gesture in
+            guard let gesture else { return }
             guard game.gameState != .playing else { return }
-            handleNavEvent(event)
+            handleMenuGesture(gesture)
         }
         .onDisappear {
             game.resetToReady()
         }
     }
+
+    // MARK: - Header
 
     private var headerBar: some View {
         HStack {
@@ -291,46 +296,57 @@ struct TypingRainView: View {
             Spacer()
 
             if game.gameState == .playing {
-                // 生命值
-                HStack(spacing: 4) {
-                    ForEach(0..<3, id: \.self) { i in
-                        Image(systemName: i < game.lives ? "heart.fill" : "heart")
-                            .font(.system(size: 16))
-                            .foregroundColor(i < game.lives ? .red : .gray.opacity(0.4))
-                    }
-                }
-                .padding(.horizontal, 10)
-
-                // 保护期倒计时
-                if game.isProtected {
+                HStack(spacing: 16) {
+                    // 生命值
                     HStack(spacing: 4) {
-                        Image(systemName: "shield.fill")
-                            .font(.system(size: 14))
-                            .foregroundColor(DesignTokens.Colors.success)
-                        Text("\(Int(game.protectionRemaining))s")
-                            .font(.system(size: 14, weight: .bold, design: .monospaced))
-                            .foregroundColor(DesignTokens.Colors.success)
+                        ForEach(0..<3, id: \.self) { i in
+                            Image(systemName: i < game.lives ? "heart.fill" : "heart")
+                                .font(.system(size: 16))
+                                .foregroundColor(i < game.lives ? .red : .gray.opacity(0.4))
+                        }
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .background(DesignTokens.Colors.success.opacity(0.15))
-                    .cornerRadius(8)
-                }
 
-                VStack(spacing: 2) {
-                    Text("分数")
-                        .font(.system(size: 10, weight: .medium))
-                        .foregroundColor(.secondary)
-                    Text("\(game.score)")
-                        .font(.system(size: 18, weight: .bold, design: .monospaced))
-                        .foregroundColor(DesignTokens.Colors.accentBlue)
+                    // 保护期
+                    if game.isProtected {
+                        HStack(spacing: 4) {
+                            Image(systemName: "shield.fill")
+                                .font(.system(size: 14))
+                                .foregroundColor(DesignTokens.Colors.success)
+                            Text("\(Int(game.protectionRemaining))s")
+                                .font(.system(size: 14, weight: .bold, design: .monospaced))
+                                .foregroundColor(DesignTokens.Colors.success)
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(DesignTokens.Colors.success.opacity(0.15))
+                        .cornerRadius(8)
+                    }
+
+                    // 连击
+                    if game.combo >= 3 {
+                        Text("x\(game.combo)")
+                            .font(.system(size: 20, weight: .black, design: .rounded))
+                            .foregroundColor(DesignTokens.Colors.accentAmber)
+                    }
+
+                    // 分数
+                    VStack(spacing: 2) {
+                        Text("分数")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Text("\(game.score)")
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(DesignTokens.Colors.accentBlue)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .frostedGlass(cornerRadius: 12)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frostedGlass(cornerRadius: 12)
             }
         }
     }
+
+    // MARK: - Ready
 
     private var readyView: some View {
         VStack(spacing: DesignTokens.Spacing.lg) {
@@ -375,94 +391,103 @@ struct TypingRainView: View {
         }
     }
 
+    // MARK: - Playing（核心：直接读取快照，不经过 TimelineView 节流）
+
     private var playingView: some View {
-        TimelineView(.periodic(from: .now, by: 1.0 / 15.0)) { _ in
-            VStack(spacing: DesignTokens.Spacing.lg) {
-                // 目标单词显示（含当前字母提示）
-                targetWordDisplay
+        VStack(spacing: DesignTokens.Spacing.lg) {
+            targetWordDisplay
+            currentLetterHint
+            t9Keyboard
 
-                // 当前目标字母提示
-                currentLetterHint
-
-                // 九宫格键盘
-                t9Keyboard
-
-                // 统计信息
+            // 统计行
+            HStack(spacing: 24) {
                 if game.lastWordTime > 0 {
-                    Text(String(format: "上个单词用时: %.2f秒", game.lastWordTime))
+                    Text(String(format: "用时 %.1fs", game.lastWordTime))
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
+                }
+                if game.wordsCompleted > 0 {
+                    Text("已完成 \(game.wordsCompleted) 词")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(.secondary)
                 }
             }
-            .onChange(of: session.gestureEngine.latestSnapshot.timestamp) { _, _ in
-                let results: [ThumbPinchGesture: PinchResult]
-                let classification: GestureClassification
-                switch session.selectedChirality {
-                case .left:
-                    results = session.gestureEngine.latestSnapshot.leftResults
-                    classification = session.gestureEngine.latestSnapshot.leftClassification
-                default:
-                    results = session.gestureEngine.latestSnapshot.rightResults
-                    classification = session.gestureEngine.latestSnapshot.rightClassification
-                }
-                game.processPinchResults(results, classification: classification)
+        }
+        .onChange(of: session.gestureEngine.latestSnapshot.timestamp) { _, _ in
+            let classification: GestureClassification
+            switch session.selectedChirality {
+            case .left:
+                classification = session.gestureEngine.latestSnapshot.leftClassification
+            default:
+                classification = session.gestureEngine.latestSnapshot.rightClassification
             }
+            game.processClassification(classification)
         }
     }
 
+    // MARK: - 目标单词
+
     private var targetWordDisplay: some View {
-        VStack(spacing: 8) {
-            Text("目标单词")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.secondary)
+        HStack(spacing: 6) {
+            ForEach(Array(game.currentWord.enumerated()), id: \.offset) { index, char in
+                let isCompleted = index < game.currentCharIndex
+                let isCurrent = index == game.currentCharIndex
 
-            HStack(spacing: 4) {
-                ForEach(Array(game.currentWord.enumerated()), id: \.offset) { index, char in
-                    let isCompleted = index < game.currentCharIndex
-                    let isCurrent = index == game.currentCharIndex
-
-                    Text(String(char).uppercased())
-                        .font(.system(size: 32, weight: .bold, design: .monospaced))
-                        .foregroundColor(isCompleted ? DesignTokens.Colors.success : isCurrent ? DesignTokens.Colors.accentBlue : .white)
-                        .frame(width: 40, height: 50)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(isCompleted ? DesignTokens.Colors.success.opacity(0.2) : isCurrent ? DesignTokens.Colors.accentBlue.opacity(0.2) : Color.white.opacity(0.1))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(isCurrent ? DesignTokens.Colors.accentBlue : Color.clear, lineWidth: 2)
-                        )
-                }
+                Text(String(char).uppercased())
+                    .font(.system(size: 36, weight: .bold, design: .monospaced))
+                    .foregroundColor(
+                        isCompleted ? DesignTokens.Colors.success
+                        : isCurrent ? .white
+                        : .white.opacity(0.35)
+                    )
+                    .frame(width: 48, height: 58)
+                    .background(
+                        RoundedRectangle(cornerRadius: 10)
+                            .fill(
+                                isCompleted ? DesignTokens.Colors.success.opacity(0.25)
+                                : isCurrent ? DesignTokens.Colors.accentBlue.opacity(0.5)
+                                : Color.white.opacity(0.06)
+                            )
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(
+                                isCurrent ? DesignTokens.Colors.accentBlue : Color.clear,
+                                lineWidth: isCurrent ? 3 : 0
+                            )
+                    )
+                    .shadow(
+                        color: isCurrent ? DesignTokens.Colors.accentBlue.opacity(0.4) : .clear,
+                        radius: isCurrent ? 10 : 0
+                    )
+                    .scaleEffect(isCurrent ? 1.1 : 1.0)
+                    .animation(.spring(response: 0.2, dampingFraction: 0.7), value: game.currentCharIndex)
             }
         }
-        .padding()
-        .overlay(
-            game.showError ?
-                RoundedRectangle(cornerRadius: 16)
-                    .stroke(Color.red.opacity(0.6), lineWidth: 2)
-                : nil
-        )
+        .padding(.vertical, 12)
+        .padding(.horizontal, 16)
         .frostedGlass(cornerRadius: 16)
     }
 
-    /// 当前需要按的字母及其所在区域提示
+    // MARK: - 字母提示
+
     private var currentLetterHint: some View {
         Group {
             if let targetChar = game.currentTargetChar,
                let keyIndex = game.currentTargetKeyIndex {
                 let key = TypingGameManager.t9Keys[keyIndex]
-                HStack(spacing: 8) {
+                HStack(spacing: 10) {
                     Text("按")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundColor(.secondary)
                     Text(String(targetChar).uppercased())
-                        .font(.system(size: 22, weight: .black, design: .monospaced))
+                        .font(.system(size: 26, weight: .black, design: .monospaced))
                         .foregroundColor(DesignTokens.Colors.accentBlue)
-                    Text("→")
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 14, weight: .bold))
                         .foregroundColor(.secondary)
                     Text(key.gesture.displayName)
-                        .font(.system(size: 15, weight: .semibold))
+                        .font(.system(size: 17, weight: .bold))
                         .foregroundColor(DesignTokens.Colors.success)
                     Text("[\(key.letters.joined(separator: " ").uppercased())]")
                         .font(.system(size: 13, weight: .medium, design: .monospaced))
@@ -475,6 +500,8 @@ struct TypingRainView: View {
         }
     }
 
+    // MARK: - 九宫格键盘
+
     private var t9Keyboard: some View {
         VStack(spacing: 8) {
             ForEach(0..<3, id: \.self) { row in
@@ -483,8 +510,13 @@ struct TypingRainView: View {
                         let index = row * 3 + col
                         let key = TypingGameManager.t9Keys[index]
                         let isTarget = game.currentTargetKeyIndex == index
-                        let isLastTapped = game.lastTappedKeyIndex == index
-                        T9KeyView(key: key, isTarget: isTarget, isLastTapped: isLastTapped)
+                        let flash = game.keyFlash[index]
+                        T9KeyCell(
+                            key: key,
+                            isTarget: isTarget,
+                            flash: flash,
+                            onFlashDone: { game.clearFlash(index) }
+                        )
                     }
                 }
             }
@@ -492,6 +524,8 @@ struct TypingRainView: View {
         .padding()
         .frostedGlass(cornerRadius: 16)
     }
+
+    // MARK: - Game Over
 
     private var gameOverView: some View {
         VStack(spacing: DesignTokens.Spacing.lg) {
@@ -513,6 +547,25 @@ struct TypingRainView: View {
                     Text("\(game.score)")
                         .font(.system(size: 32, weight: .black, design: .monospaced))
                         .foregroundColor(DesignTokens.Colors.accentBlue)
+                }
+
+                HStack(spacing: 20) {
+                    VStack(spacing: 2) {
+                        Text("完成单词")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Text("\(game.wordsCompleted)")
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(.primary)
+                    }
+                    VStack(spacing: 2) {
+                        Text("最大连击")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.secondary)
+                        Text("\(game.maxCombo)")
+                            .font(.system(size: 18, weight: .bold, design: .monospaced))
+                            .foregroundColor(DesignTokens.Colors.accentAmber)
+                    }
                 }
 
                 if game.score >= game.highScore && game.score > 0 {
@@ -541,10 +594,14 @@ struct TypingRainView: View {
         }
     }
 
-    private func handleNavEvent(_ event: GameNavEvent) {
+    // MARK: - 菜单手势
+
+    private func handleMenuGesture(_ event: GestureEvent) {
+        guard event.onPress else { return }
+
         switch game.gameState {
         case .ready, .gameOver:
-            if event == .confirm {
+            if event.gesture == .middleIntermediateTip {
                 game.startGame()
             }
         case .playing:
@@ -553,32 +610,76 @@ struct TypingRainView: View {
     }
 }
 
-// MARK: - T9按键视图
+// MARK: - T9按键视图（含闪烁反馈）
 
-struct T9KeyView: View {
+struct T9KeyCell: View {
     let key: T9Key
     let isTarget: Bool
-    let isLastTapped: Bool
+    let flash: KeyFlash?
+    let onFlashDone: () -> Void
+
+    @State private var flashActive = false
+
+    private var bgColor: Color {
+        if flashActive {
+            switch flash {
+            case .correct: return DesignTokens.Colors.success
+            case .wrong: return DesignTokens.Colors.error
+            default: break
+            }
+        }
+        if isTarget { return DesignTokens.Colors.accentBlue }
+        return Color.white.opacity(0.08)
+    }
+
+    private var borderColor: Color {
+        if flashActive {
+            switch flash {
+            case .correct: return DesignTokens.Colors.success
+            case .wrong: return DesignTokens.Colors.error
+            default: break
+            }
+        }
+        if isTarget { return DesignTokens.Colors.accentBlue }
+        return Color.white.opacity(0.15)
+    }
 
     var body: some View {
         VStack(spacing: 4) {
-            // 手势名称
             Text(key.gesture.displayName)
                 .font(.system(size: 10, weight: .medium))
                 .foregroundColor(.secondary.opacity(0.6))
-            // 字母
             Text(key.letters.joined(separator: " ").uppercased())
-                .font(.system(size: 16, weight: .bold, design: .monospaced))
-                .foregroundColor(isTarget ? DesignTokens.Colors.accentBlue : .white)
+                .font(.system(size: isTarget ? 20 : 16, weight: .bold, design: .monospaced))
+                .foregroundColor(isTarget || flashActive ? .white : .white.opacity(0.7))
         }
-        .frame(maxWidth: .infinity, minHeight: 60)
+        .frame(maxWidth: .infinity, minHeight: 64)
         .background(
             RoundedRectangle(cornerRadius: 12)
-                .fill(isTarget ? DesignTokens.Colors.accentBlue.opacity(0.3) : isLastTapped ? Color.white.opacity(0.2) : Color.white.opacity(0.1))
+                .fill(bgColor)
+                .shadow(
+                    color: isTarget ? DesignTokens.Colors.accentBlue.opacity(0.4) : .clear,
+                    radius: isTarget ? 10 : 0
+                )
         )
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(isTarget ? DesignTokens.Colors.accentBlue : Color.white.opacity(0.3), lineWidth: isTarget ? 2 : 1)
+                .stroke(borderColor, lineWidth: isTarget || flashActive ? 3 : 1)
         )
+        .scaleEffect(flashActive ? 1.15 : 1.0)
+        .animation(.spring(response: 0.15, dampingFraction: 0.5), value: flashActive)
+        .onChange(of: flash) { _, newFlash in
+            guard newFlash != nil else {
+                flashActive = false
+                return
+            }
+            flashActive = true
+            // 150ms后清除闪烁
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                flashActive = false
+                onFlashDone()
+            }
+        }
     }
 }

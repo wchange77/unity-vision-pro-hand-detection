@@ -20,6 +20,16 @@ import UIKit
 /// 导航事件
 enum GameNavEvent: Equatable, Sendable {
     case up, down, left, right, confirm
+
+    var accessibilityLabel: String {
+        switch self {
+        case .up: return "向上"
+        case .down: return "向下"
+        case .left: return "向左"
+        case .right: return "向右"
+        case .confirm: return "确认"
+        }
+    }
 }
 
 /// 手势导航路由器
@@ -47,7 +57,10 @@ final class GestureNavigationRouter {
     ]
     
     /// 防抖间隔（秒）— 同一手势释放后到允许再次触发的最小间隔
-    var debounceInterval: TimeInterval = 0.15
+    var debounceInterval: TimeInterval = 0.08
+    
+    /// 双击确认间隔（秒）
+    var doubleTapInterval: TimeInterval = 0.5
     
     // MARK: - 内部状态
 
@@ -58,6 +71,10 @@ final class GestureNavigationRouter {
     /// 当前正在按下中的手势（按下期间不重复触发，释放后清除）
     @ObservationIgnored
     private var pressingGesture: ThumbPinchGesture?
+    
+    /// 确认手势的上次触发时间（用于双击检测）
+    @ObservationIgnored
+    private var lastConfirmTime: TimeInterval = 0
 
     /// 事件超时时间（秒）
     private let eventTimeout: TimeInterval = 1.0
@@ -113,16 +130,41 @@ final class GestureNavigationRouter {
             // 防抖
             guard now - lastEventTime > debounceInterval else { return }
 
-            latestEvent = event
-            eventGeneratedTime = now
-            lastEventTime = now
-            pressingGesture = gesture
-            // VoiceOver 无障碍播报
-            if UIAccessibility.isVoiceOverRunning {
-                UIAccessibility.post(
-                    notification: .announcement,
-                    argument: event.accessibilityLabel
-                )
+            // 确认手势需要双击
+            if event == .confirm {
+                let timeSinceLastConfirm = now - lastConfirmTime
+                if timeSinceLastConfirm < doubleTapInterval {
+                    // 双击成功，发射确认事件
+                    latestEvent = event
+                    eventGeneratedTime = now
+                    lastEventTime = now
+                    pressingGesture = gesture
+                    lastConfirmTime = 0  // 重置
+                    // VoiceOver 无障碍播报
+                    if UIAccessibility.isVoiceOverRunning {
+                        UIAccessibility.post(
+                            notification: .announcement,
+                            argument: event.accessibilityLabel
+                        )
+                    }
+                } else {
+                    // 第一次点击，记录时间
+                    lastConfirmTime = now
+                    pressingGesture = gesture
+                }
+            } else {
+                // 非确认手势，直接触发
+                latestEvent = event
+                eventGeneratedTime = now
+                lastEventTime = now
+                pressingGesture = gesture
+                // VoiceOver 无障碍播报
+                if UIAccessibility.isVoiceOverRunning {
+                    UIAccessibility.post(
+                        notification: .announcement,
+                        argument: event.accessibilityLabel
+                    )
+                }
             }
         }
     }

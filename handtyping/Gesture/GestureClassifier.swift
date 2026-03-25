@@ -66,14 +66,14 @@ class GestureClassifier {
     // MARK: - 阈值配置
 
     /// 快速确认阈值 - 高置信度手势跳过平滑
-    private(set) var fastConfirmThreshold: Float = 0.65
+    private(set) var fastConfirmThreshold: Float = 0.55
 
     /// 卡门圆进入阈值（karmanDist < 此值才算检测到手势）
-    private(set) var entryThreshold: Float = 1.15
+    private(set) var entryThreshold: Float = 1.2
 
     /// 消歧距离边际：最佳手势的 karmanDist 必须比次佳小此比例
-    /// 例如 0.20 表示最佳必须比次佳领先 20%
-    private(set) var disambiguationMargin: Float = 0.20
+    /// 例如 0.25 表示最佳必须比次佳领先 25%
+    private(set) var disambiguationMargin: Float = 0.25
 
     /// 同手指不同关节间的消歧边际（更宽松，因为同手指关节间距本身就小）
     /// 例如 ringTip vs ringIntermediateTip — 只要最佳领先 8% 就接受
@@ -118,14 +118,14 @@ class GestureClassifier {
             return phaseTracker.update(
                 bestGesture: nil,
                 karmanDist: Float.greatestFiniteMagnitude,
-                releaseMultiplier: 1.6,
+                releaseMultiplier: 1.3,
                 confidence: 0,
                 chirality: chirality
             )
         }
 
         let dist = results[gesture]?.karmanDistance ?? Float.greatestFiniteMagnitude
-        let releaseMult = results[gesture]?.releaseMultiplier ?? 1.6
+        let releaseMult = results[gesture]?.releaseMultiplier ?? 1.3
 
         return phaseTracker.update(
             bestGesture: gesture,

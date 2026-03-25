@@ -64,18 +64,6 @@ final class GameGestureEngine {
         }
     }
 
-    /// 统一手势状态（供框架组件消费，仅读取时求值，零 per-frame 开销）
-    var unifiedState: UnifiedGestureState {
-        let cls = activeGesture
-        return UnifiedGestureState(
-            thumbPinch: cls,
-            frameworkGesture: cls.gesture?.frameworkGesture,
-            navSemantic: cls.gesture?.navSemantic,
-            confidence: cls.confidence,
-            phase: cls.phase
-        )
-    }
-
     // MARK: - 配置
 
     /// 用户选定的操作手
@@ -116,9 +104,7 @@ final class GameGestureEngine {
     func flush() -> Bool {
         guard let vm = handViewModel else { return false }
 
-        // 刷新底层数据
-        vm.flushPinchDataToUI()
-
+        // 数据已在 tick() 中统一刷新，直接读取
         let leftResults = vm.leftPinchResults
         let rightResults = vm.rightPinchResults
 

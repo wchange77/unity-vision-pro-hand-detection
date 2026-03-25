@@ -62,6 +62,24 @@ struct BoneCalibrationView: View {
             }
         }
         .padding()
+        .onChange(of: session.navRouter.latestEvent) { _, event in
+            guard let event else { return }
+            handleNavEvent(event)
+            session.navRouter.consumeEvent()
+        }
+    }
+
+    private func handleNavEvent(_ event: GameNavEvent) {
+        if event == .confirm {
+            if !isRecording && result == nil {
+                startRecording()
+            } else if let result, result.passed {
+                applyResult(result)
+                session.appFlowState = .calibrationPrompt
+            } else if let result, !result.passed {
+                retry()
+            }
+        }
     }
 
     private func startRecording() {

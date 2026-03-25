@@ -215,10 +215,100 @@ struct SkeletonRecoveryButton: View {
     }
 }
 
+// MARK: - GameScoreDisplay（分数显示）
+
+/// 游戏中实时分数展示组件，带 neonGlow 高亮效果。
+struct GameScoreDisplay: View {
+    let title: String
+    let score: Int
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.secondary)
+
+            Text("\(score)")
+                .font(.system(size: 28, weight: .bold, design: .monospaced))
+                .foregroundColor(color)
+        }
+        .neonGlow(
+            color: color,
+            radius: 8,
+            intensity: 0.3,
+            animated: false
+        )
+        .accessibilityLabel("\(title)：\(score)")
+    }
+}
+
+// MARK: - GameOverModal（游戏结束弹窗）
+
+/// 基于 frostedGlass 的游戏结束弹窗。
+/// 统一所有游戏的结束界面风格。
+struct GameOverModal<Content: View>: View {
+    @Binding var isPresented: Bool
+    let title: String
+    let score: Int
+    let color: Color
+    @ViewBuilder let actions: () -> Content
+
+    var body: some View {
+        if isPresented {
+            ZStack {
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .onTapGesture { withAnimation { isPresented = false } }
+
+                VStack(spacing: DesignTokens.Spacing.md) {
+                    // 标题
+                    Text(title)
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundColor(color)
+
+                    // 分数
+                    VStack(spacing: 4) {
+                        Text("最终得分")
+                            .font(.system(size: 13))
+                            .foregroundColor(.secondary)
+
+                        Text("\(score)")
+                            .font(.system(size: 36, weight: .bold, design: .monospaced))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [color, color.opacity(0.6)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                            .neonGlow(
+                                color: color,
+                                radius: 12,
+                                intensity: 0.5,
+                                animated: false
+                            )
+                    }
+
+                    Divider().opacity(0.15)
+
+                    // 操作按钮
+                    actions()
+                }
+                .padding(DesignTokens.Spacing.lg)
+                .frame(minWidth: 280)
+                .frostedGlass(intensity: 0.6, cornerRadius: 20, borderWidth: 1.5)
+            }
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.3), value: isPresented)
+        }
+    }
+}
+
 // MARK: - Right Sidebar Panel（右侧控制面板）
 
-/// 右侧控制面板 — 3 个等大按钮，纵向排列。
-/// 替代原来太小的 ornament 按钮，使用 VisionUI 框架风格的 frostedGlass 卡片。
+/// 右侧控制面板 — 3 个操作卡片，纵向排列。
+/// 使用 VisionUI frostedGlass 框架风格。
 struct RightSidebarPanel: View {
     @Environment(HandViewModel.self) private var model
     let session: GameSessionManager

@@ -41,7 +41,8 @@ enum GameType: String, CaseIterable, Identifiable {
     case tetris            // 俄罗斯方块
     case breakout          // 打砖块
     case flappyBird        // 直升机（原 Flappy Bird）
-    case runner            // 青蛙过河（原跑酷）
+    case runner            // 青蛙过河（原跑酷）→已替换为打地鼠
+    case whackAMole        // 打地鼠
     case typingRain        // 字母雨打字游戏
 
     var id: String { rawValue }
@@ -57,6 +58,7 @@ enum GameType: String, CaseIterable, Identifiable {
         case .breakout:         return "打砖块"
         case .flappyBird:       return "直升机"
         case .runner:           return "青蛙过河"
+        case .whackAMole:       return "打地鼠"
         case .typingRain:       return "字母雨"
         }
     }
@@ -70,8 +72,9 @@ enum GameType: String, CaseIterable, Identifiable {
         case .snake:            return "arrow.turn.up.right"
         case .tetris:           return "square.stack.3d.up"
         case .breakout:         return "circle.grid.cross"
-        case .flappyBird:       return "helicopter"
+        case .flappyBird:       return "airplane"
         case .runner:           return "hare"
+        case .whackAMole:       return "hammer.fill"
         case .typingRain:       return "textformat.abc"
         }
     }
@@ -87,6 +90,7 @@ enum GameType: String, CaseIterable, Identifiable {
         case .breakout:         return DesignTokens.Colors.accentBlue
         case .flappyBird:       return DesignTokens.Colors.warning
         case .runner:           return DesignTokens.Colors.error
+        case .whackAMole:       return DesignTokens.Colors.accentAmber
         case .typingRain:       return DesignTokens.Colors.accentGreen
         }
     }
@@ -102,14 +106,17 @@ enum GameType: String, CaseIterable, Identifiable {
         case .breakout:         return "打砖块"
         case .flappyBird:       return "经典直升机闯关"
         case .runner:           return "经典青蛙过河"
+        case .whackAMole:       return "打地鼠反应游戏"
         case .typingRain:       return "3D字母雨打字"
         }
     }
 
     var isAvailable: Bool {
         switch self {
-        case .gestureTest, .gestureDetection, .pianoTiles, .typingRain, .game2048, .snake, .tetris, .breakout, .flappyBird, .runner:
+        case .gestureTest, .gestureDetection, .pianoTiles, .typingRain, .game2048, .snake, .tetris, .breakout, .flappyBird, .whackAMole:
             return true
+        case .runner:
+            return false
         }
     }
 }
@@ -123,11 +130,15 @@ final class GameSessionManager {
 
     // MARK: - 子模块
 
-    /// 手势检测引擎
-    let gestureEngine = GameGestureEngine()
+    /// 统一手势管理器
+    @ObservationIgnored
+    private(set) var gestureManager: GestureManager?
 
-    /// 导航路由器
+    /// 手势导航路由器
     let navRouter = GestureNavigationRouter()
+
+    /// 手势检测引擎（向后兼容，内部代理到 GestureManager）
+    let gestureEngine = GameGestureEngine()
 
     /// 手势配置
     let config: GestureConfig
@@ -141,6 +152,7 @@ final class GameSessionManager {
     var selectedChirality: HandAnchor.Chirality? = .right {
         didSet {
             gestureEngine.selectedChirality = selectedChirality
+            gestureManager?.selectedChirality = selectedChirality
         }
     }
 
@@ -158,10 +170,8 @@ final class GameSessionManager {
         gestureEngine.activeGesture.isActive
     }
 
-    /// 全局返回键长按进度 (0-1)
-    var quickBackProgress: Float {
-        quickBackDetector.progress
-    }
+    /// 统一手势事件（存储属性，避免每帧重新计算）
+    private(set) var currentGesture: GestureEvent? = nil
 
     /// 是否可以返回（用于按钮禁用状态）
     var canGoBack: Bool {
@@ -182,12 +192,12 @@ final class GameSessionManager {
 
     init(config: GestureConfig = .default) {
         self.config = config
-        navRouter.debounceInterval = config.navDebounce
     }
 
     /// 启动会话
-    func start(with viewModel: HandViewModel) {
+    func start(with viewModel: HandViewModel, gestureManager: GestureManager) {
         self.handViewModel = viewModel
+        self.gestureManager = gestureManager
         gestureEngine.bind(to: viewModel)
         // 配置独立分类器阈值（passthrough 模式下不影响 ECS 分类器）
         gestureEngine.configureClassifier(config)
@@ -195,54 +205,48 @@ final class GameSessionManager {
         appFlowState = .boneCalibration
     }
 
-    /// 全局返回键检测器（大拇指捏小指指根）
-    @ObservationIgnored
-    private let quickBackDetector = QuickBackDetector()
-
     // MARK: - 核心刷新循环
 
-    /// 由 GameTickDriver 在主线程调用，驱动手势检测和导航。
+    /// 由 GameTickDriver 在主线程调用，驱动手势检测
     func tick() {
-        let hasData = gestureEngine.flush()
-        guard hasData else { return }
+        // 统一刷新一次（避免重复调用）
+        handViewModel?.flushPinchDataToUI()
 
+        gestureManager?.flush()
+        gestureEngine.flush()
+        
+        // 更新导航路由器
+        navRouter.process(snapshot: gestureEngine.latestSnapshot, selectedChirality: selectedChirality)
+
+        // 更新 currentGesture（只在变化时赋值）
         let snapshot = gestureEngine.latestSnapshot
+        let classification: GestureClassification
 
-        // 全局返回键检测（所有状态都可用，包括校准）
-        let results: [ThumbPinchGesture: PinchResult]
         switch selectedChirality {
-        case .left: results = snapshot.leftResults
-        default: results = snapshot.rightResults
-        }
-        let knuckleValue = results[.littleKnuckle]?.pinchValue ?? 0
-
-        if quickBackDetector.update(pinchValue: knuckleValue, timestamp: snapshot.timestamp) {
-            handleQuickReturn()
-            return
+        case .left: classification = snapshot.leftClassification
+        case .right: classification = snapshot.rightClassification
+        default: classification = snapshot.rightClassification
         }
 
-        // 校准中：仅更新导航提示高亮，不触发导航事件
-        if appFlowState == .gestureCalibration {
-            navRouter.updateHintOnly(snapshot: snapshot, selectedChirality: selectedChirality)
-            return
+        let newGesture: GestureEvent? = if let gesture = classification.gesture, let phase = classification.phase {
+            GestureEvent(
+                gesture: gesture,
+                phase: phase,
+                confidence: classification.confidence,
+                timestamp: snapshot.timestamp
+            )
+        } else {
+            nil
         }
 
-        navRouter.process(
-            snapshot: snapshot,
-            selectedChirality: selectedChirality
-        )
-    }
-
-    /// 全局返回键处理（手势长按触发）
-    private func handleQuickReturn() {
-        // 游戏中和校准中禁用手势返回
-        if case .playing = appFlowState {
-            return
+        // 只在手势或phase变化时更新
+        if let new = newGesture, let old = currentGesture {
+            if new.gesture != old.gesture || new.phase != old.phase {
+                currentGesture = new
+            }
+        } else if newGesture != nil || currentGesture != nil {
+            currentGesture = newGesture
         }
-        if appFlowState == .gestureCalibration {
-            return
-        }
-        handleQuickReturnButton()
     }
 
     /// 全局返回键处理（按钮或手势触发）
@@ -300,6 +304,8 @@ final class GameSessionManager {
         guard game.isAvailable else { return }
         selectedGame = game
         handViewModel?.isGamePlaying = true
+        // 切换手势映射上下文
+        gestureManager?.setContext(GestureMappingTable.context(for: game))
         appFlowState = .playing(game)
         navRouter.consumeEvent()
     }
@@ -308,6 +314,7 @@ final class GameSessionManager {
     func exitToLobby() {
         selectedGame = nil
         handViewModel?.isGamePlaying = false
+        gestureManager?.setContext(.navigation)
         appFlowState = .gameLobby
         navRouter.consumeEvent()
     }

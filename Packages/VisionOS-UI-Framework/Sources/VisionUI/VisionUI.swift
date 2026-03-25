@@ -9,6 +9,7 @@
 import SwiftUI
 import RealityKit
 import Spatial
+@_exported import VisionUISpatial
 
 /// VisionUI - Complete UI Framework for VisionOS
 ///

@@ -23,6 +23,7 @@ struct ContentView: View {
     var body: some View {
         mainContent
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .persistentSystemOverlays(.hidden)
             .customGesturePriority(session: session)
             .glassBackgroundEffect()
             .animation(DesignTokens.Animation.slow, value: immersiveSpaceError)
@@ -95,7 +96,9 @@ struct ContentView: View {
                             break
                         }
                     } else {
-                        await dismissImmersiveSpace()
+                        if immersiveSpaceOpened {
+                            await dismissImmersiveSpace()
+                        }
                         immersiveSpaceOpened = false
                         model.reset()
                         session.appFlowState = .calibrationPrompt
@@ -160,7 +163,7 @@ private struct GameTickDriver: View {
     @State private var tickDate: Date = .now
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 0.022)) { context in
+        TimelineView(.periodic(from: .now, by: 0.0111)) { context in
             Color.clear
                 .onChange(of: context.date) { _, newDate in
                     session.tick()

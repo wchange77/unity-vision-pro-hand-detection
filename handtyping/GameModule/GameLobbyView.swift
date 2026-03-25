@@ -42,10 +42,9 @@ struct GameLobbyView: View {
         }
         .padding(DesignTokens.Spacing.lg)
         .frame(minWidth: 800, minHeight: 400)
-        .onChange(of: session.navRouter.latestEvent) { _, event in
-            guard let event else { return }
-            defer { session.navRouter.consumeEvent() }
-            handleNavEvent(event)
+        .onChange(of: session.currentGesture) { _, gesture in
+            guard let gesture else { return }
+            handleGesture(gesture)
         }
     }
 
@@ -80,40 +79,42 @@ struct GameLobbyView: View {
         }
     }
 
-    // MARK: - Navigation
+    // MARK: - Gesture Handling
 
-    private func handleNavEvent(_ event: GameNavEvent) {
+    private func handleGesture(_ event: GestureEvent) {
+        guard event.onPress else { return }
+
         let row = focusedIndex / columns
         let col = focusedIndex % columns
         let rows = (games.count + columns - 1) / columns
 
-        switch event {
-        case .up:
+        switch event.gesture {
+        case .middleTip:
             if row > 0 {
-                let newRow = row - 1
-                let newIndex = newRow * columns + col
+                let newIndex = (row - 1) * columns + col
                 if newIndex < games.count { focusedIndex = newIndex }
             }
-        case .down:
+        case .middleKnuckle:
             if row < rows - 1 {
-                let newRow = row + 1
-                let newIndex = newRow * columns + col
+                let newIndex = (row + 1) * columns + col
                 if newIndex < games.count { focusedIndex = newIndex }
             }
-        case .left:
+        case .ringIntermediateTip:
             if col > 0 {
                 focusedIndex = row * columns + (col - 1)
             }
-        case .right:
+        case .indexIntermediateTip:
             if col < columns - 1 {
                 let newIndex = row * columns + (col + 1)
                 if newIndex < games.count { focusedIndex = newIndex }
             }
-        case .confirm:
+        case .middleIntermediateTip:
             let game = games[focusedIndex]
             if game.isAvailable {
                 session.selectGame(game)
             }
+        default:
+            break
         }
     }
 }

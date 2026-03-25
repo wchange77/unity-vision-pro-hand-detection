@@ -261,7 +261,9 @@ class HandViewModel: @unchecked Sendable {
                 let handInfo = (leftVal >= rightVal) ? leftHand : rightHand
                 if let handInfo, let thumbTip = handInfo.allJoints[.thumbTip] {
                     if let joint = handInfo.allJoints[calPrimaryJoint] {
-                        let dist = simd_distance(thumbTip.position, joint.position)
+                        let thumbPos = thumbTip.position
+                        let jointPos = joint.position
+                        let dist = simd_distance(thumbPos, jointPos)
                         buf.calibrationSamples.append(dist)
                         buf.calibrationHandInfos.append(handInfo)
                         // 记录时间戳（相对于录制开始）
@@ -270,7 +272,8 @@ class HandViewModel: @unchecked Sendable {
                         var neighbors: [Float] = []
                         for neighborJoint in calNeighborJoints {
                             if let nJoint = handInfo.allJoints[neighborJoint] {
-                                neighbors.append(simd_distance(thumbTip.position, nJoint.position))
+                                let nPos = nJoint.position
+                                neighbors.append(simd_distance(thumbPos, nPos))
                             }
                         }
                         buf.calibrationNeighborDists.append(neighbors)
@@ -382,8 +385,7 @@ class HandViewModel: @unchecked Sendable {
             let karmanConfig = activeProfile?.normalizedKarmanCircle(for: gesture) ?? gesture.defaultKarmanCircle
             let karmanDist = karmanConfig.karmanDistance(
                 thumbPos: thumbPos,
-                jointPos: joint.position,
-                jointRotation: joint.rotation
+                jointPos: joint.position
             )
             let releaseMult = activeProfile?.pinchConfig(for: gesture).releaseMultiplier ?? 1.6
 

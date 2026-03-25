@@ -343,7 +343,7 @@ final class PianoTilesGameManager {
             withTimeInterval: 0.3,
             repeats: false
         ) { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, idx < self.cells.count else { return }
                 self.cells[idx].flashState = .idle
             }
@@ -466,14 +466,10 @@ struct PianoTilesView: View {
         }
         .padding(DesignTokens.Spacing.lg)
         .frame(minWidth: 700, minHeight: 520)
-        .onChange(of: session.navRouter.latestEvent) { _, event in
-            guard let event else { return }
-            defer { session.navRouter.consumeEvent() }
-
-            // 游戏中忽略导航事件（仅使用12手势捏合检测）
+        .onChange(of: session.currentGesture) { _, gesture in
+            guard let gesture else { return }
             guard game.gameState != .playing else { return }
-
-            handleNavEvent(event)
+            handleGesture(gesture)
         }
         .onDisappear {
             game.resetToReady()
@@ -787,30 +783,27 @@ struct PianoTilesView: View {
 
     // MARK: - Navigation Events (菜单阶段使用上下左右OK)
 
-    private func handleNavEvent(_ event: GameNavEvent) {
+    private func handleGesture(_ event: GestureEvent) {
+        guard event.onPress else { return }
+
         switch game.gameState {
         case .ready:
-            if event == .confirm {
+            if event.gesture == .middleIntermediateTip {
                 game.startGame()
             }
         case .playing:
-            // 游戏中不处理导航事件（onChange 中已提前 return）
             break
         case .gameOver:
-            switch event {
-            case .up:
-                game.gameOverSelection = .replay
-            case .down:
-                game.gameOverSelection = .backToLobby
-            case .confirm:
-                switch game.gameOverSelection {
-                case .replay:
+            switch event.gesture {
+            case .middleTip: game.gameOverSelection = .replay
+            case .middleKnuckle: game.gameOverSelection = .backToLobby
+            case .middleIntermediateTip:
+                if game.gameOverSelection == .replay {
                     game.startGame()
-                case .backToLobby:
+                } else {
                     session.exitToLobby()
                 }
-            case .left, .right:
-                break
+            default: break
             }
         }
     }

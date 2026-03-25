@@ -95,9 +95,9 @@ struct HandTrackingSystem: System {
 
     /// Frame counter for throttling gesture detection
     private var frameCount: Int = 0
-    /// 检测间隔：每2帧运行一次（90fps → 45Hz检测频率）
-    /// 配合 GestureClassifier 的2帧平滑窗口，手势确认延迟 = 44ms
-    private static let detectionInterval = 2
+    /// 检测间隔：每1帧运行一次（90fps → 90Hz检测频率）
+    /// 配合 GestureClassifier 的2帧平滑窗口，手势确认延迟 = 22ms
+    private static let detectionInterval = 1
     /// Refresh perf UI every ~1s (90 frames at 90fps)
     private static let perfUIInterval = 90
 

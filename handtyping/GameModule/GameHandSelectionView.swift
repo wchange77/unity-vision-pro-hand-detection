@@ -68,30 +68,33 @@ struct GameHandSelectionView: View {
         }
         .padding(DesignTokens.Spacing.xl)
         .frame(minWidth: 500, minHeight: 350)
-        .onChange(of: session.navRouter.latestEvent) { _, event in
-            guard let event else { return }
-            defer { session.navRouter.consumeEvent() }
-            handleNav(event)
+        .onChange(of: session.currentGesture) { _, gesture in
+            guard let gesture else { return }
+            handleGesture(gesture)
         }
     }
 
-    private func handleNav(_ event: GameNavEvent) {
-        switch event {
-        case .left:
+    private func handleGesture(_ event: GestureEvent) {
+        guard event.onPress else { return }
+
+        switch event.gesture {
+        case .ringIntermediateTip:
             if !focusOnBack { selectedSide = 0 }
-        case .right:
+        case .indexIntermediateTip:
             if !focusOnBack { selectedSide = 1 }
-        case .down:
+        case .middleKnuckle:
             focusOnBack = true
-        case .up:
+        case .middleTip:
             focusOnBack = false
-        case .confirm:
+        case .middleIntermediateTip:
             if focusOnBack {
                 session.exitToCalibrationPrompt()
             } else {
                 let chirality: HandAnchor.Chirality = selectedSide == 0 ? .left : .right
                 session.confirmHand(chirality)
             }
+        default:
+            break
         }
     }
 }

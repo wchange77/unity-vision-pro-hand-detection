@@ -223,7 +223,7 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
 
         // 小指不缩放
         if fingerGroup == .little {
-            return KarmanCircleConfig(radius: boneLength, releaseMultiplier: 1.6)
+            return KarmanCircleConfig(radius: boneLength, releaseMultiplier: 1.3)
         }
 
         // 食指/中指/无名指使用不同系数
@@ -234,7 +234,7 @@ enum ThumbPinchGesture: Int, CaseIterable, Identifiable, Sendable {
         case .knuckle: multiplier = 0.95
         }
 
-        return KarmanCircleConfig(radius: boneLength * multiplier, releaseMultiplier: 1.6)
+        return KarmanCircleConfig(radius: boneLength * multiplier, releaseMultiplier: 1.3)
     }
 
     enum FingerGroup: String, CaseIterable, Sendable {
@@ -349,8 +349,7 @@ struct KarmanCircleConfig: Sendable, Codable, Equatable {
     /// - 返回值 > 1.0 表示拇指在圆外部（离开/抬起）
     func karmanDistance(
         thumbPos: SIMD3<Float>,
-        jointPos: SIMD3<Float>,
-        jointRotation: simd_quatf
+        jointPos: SIMD3<Float>
     ) -> Float {
         return simd_distance(thumbPos, jointPos) / radius
     }
@@ -372,9 +371,9 @@ struct PinchConfig: Sendable, Codable {
         // 根据距离范围推导默认椭圆半径
         self.karmanCircle = KarmanCircleConfig(
             radius: maxDistance * 0.5,
-            releaseMultiplier: 1.6
+            releaseMultiplier: 1.3
         )
-        self.releaseMultiplier = 1.6
+        self.releaseMultiplier = 1.3
     }
 
     init(maxDistance: Float, minDistance: Float, karmanCircle: KarmanCircleConfig, releaseMultiplier: Float) {

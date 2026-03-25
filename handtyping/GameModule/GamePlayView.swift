@@ -22,41 +22,19 @@ struct GamePlayView: View {
         case .typingRain:
             TypingRainView(session: session)
         case .game2048:
-            if let url = Bundle.main.url(forResource: "2048", withExtension: "html") {
-                WebGameView(session: session, gameURL: url, gameTitle: "2048")
-            } else {
-                ComingSoonView(session: session, gameType: gameType)
-            }
+            Game2048View(session: session)
         case .snake:
-            if let url = Bundle.main.url(forResource: "snake", withExtension: "html") {
-                WebGameView(session: session, gameURL: url, gameTitle: "贪吃蛇")
-            } else {
-                ComingSoonView(session: session, gameType: gameType)
-            }
+            SnakeGameView(session: session)
         case .tetris:
-            if let url = Bundle.main.url(forResource: "tetris", withExtension: "html") {
-                WebGameView(session: session, gameURL: url, gameTitle: "俄罗斯方块")
-            } else {
-                ComingSoonView(session: session, gameType: gameType)
-            }
+            TetrisGameView(session: session)
         case .breakout:
-            if let url = Bundle.main.url(forResource: "breakout", withExtension: "html") {
-                WebGameView(session: session, gameURL: url, gameTitle: "打砖块")
-            } else {
-                ComingSoonView(session: session, gameType: gameType)
-            }
+            BreakoutGameView(session: session)
         case .flappyBird:
-            if let url = Bundle.main.url(forResource: "flappy", withExtension: "html") {
-                WebGameView(session: session, gameURL: url, gameTitle: "直升机")
-            } else {
-                ComingSoonView(session: session, gameType: gameType)
-            }
+            FlappyBirdView(session: session)
         case .runner:
-            if let url = Bundle.main.url(forResource: "runner", withExtension: "html") {
-                WebGameView(session: session, gameURL: url, gameTitle: "青蛙过河")
-            } else {
-                ComingSoonView(session: session, gameType: gameType)
-            }
+            RunnerGameView(session: session)
+        case .whackAMole:
+            WhackAMoleView(session: session)
         }
     }
 }

@@ -37,7 +37,7 @@ final class GesturePhaseTracker {
     /// 根据椭球体距离更新按下/抬起状态
     ///
     /// 状态转换：
-    /// - Idle + karmanDist < 1.15 → Pressing
+    /// - Idle + karmanDist < 1.0 → Pressing
     /// - Pressing + karmanDist > releaseMultiplier → Completed（瞬态）
     /// - Pressing + 同手势仍在椭圆内 → 继续 Pressing
     /// - Pressing + 不同手势进入且显著更优 → 取消当前，开始新 Pressing
@@ -94,14 +94,11 @@ final class GesturePhaseTracker {
 
             // 检查是否抬起（当前手势的椭球体距离 > 释放阈值）
             if karmanDist > releaseMultiplier || bestGesture == nil {
-                // 抬起检测：标记完成，下一帧输出 .completed
+                // 抬起检测：立即输出 .completed
                 state.isPressed = false
                 state.activeGesture = nil
-                state.justCompleted = true
-                state.completedGesture = activeGesture
-                state.completedConfidence = confidence
-                // 本帧继续返回 pressing，下一帧返回 completed
-                return .detected(activeGesture, confidence: confidence, phase: .pressing)
+                state.justCompleted = false
+                return .detected(activeGesture, confidence: confidence, phase: .completed)
             }
 
             // 仍在按下中
@@ -109,7 +106,7 @@ final class GesturePhaseTracker {
         }
 
         // 空闲状态：检查是否有新手势进入椭圆
-        if let gesture = bestGesture, karmanDist < 1.15 {
+        if let gesture = bestGesture, karmanDist < 1.0 {
             state.isPressed = true
             state.activeGesture = gesture
             return .detected(gesture, confidence: confidence, phase: .pressing)

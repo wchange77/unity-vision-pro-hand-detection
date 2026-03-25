@@ -3,8 +3,7 @@
 //  handtyping
 //
 //  手势检测游戏视图。
-//  原 ThumbPinchView 改造：移除 toolbar 导航按钮，改用 session 参数。
-//  保持核心双手检测 + 性能面板功能不变。
+//  使用 VisionUI SpatialCard、VolumetricText、NeonGlow。
 //
 
 import SwiftUI

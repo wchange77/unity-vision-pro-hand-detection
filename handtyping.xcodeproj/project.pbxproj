@@ -7,22 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		9911949AFFA93BB4C968ECE3 /* GesturePhaseTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB6110C2B10CCD0DCDEC4FD4 /* GesturePhaseTracker.swift */; };
-		9A30ACE62F7179F600D7E114 /* CalibrationAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A30ACE52F7179F600D7E114 /* CalibrationAnalyzer.swift */; };
 		9A310A822F7013FE00E693C0 /* MLModelDocumentation.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A812F7013FE00E693C0 /* MLModelDocumentation.md */; };
 		9A310A842F70158A00E693C0 /* 训练步骤说明.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A832F70158A00E693C0 /* 训练步骤说明.md */; };
 		9A310A8D2F7026D200E693C0 /* ML_PIPELINE.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A8C2F7026D200E693C0 /* ML_PIPELINE.md */; };
-		9A310A932F702FF200E693C0 /* GestureClassifier.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A310A922F702FF200E693C0 /* GestureClassifier.swift */; };
 		9A310A9C2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md in Resources */ = {isa = PBXBuildFile; fileRef = 9A310A9B2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md */; };
 		9A9B4ABD2F6E3BAA00513B05 /* RealityKitContent in Frameworks */ = {isa = PBXBuildFile; productRef = 9A9B4ABC2F6E3BAA00513B05 /* RealityKitContent */; };
 		9AEFFF3C2F71049700A20DBF /* AGENTS.md in Resources */ = {isa = PBXBuildFile; fileRef = 9AEFFF3B2F71049700A20DBF /* AGENTS.md */; };
-		9AF7FD1C2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD1B2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift */; };
-		9AF7FD1E2F6E8A2300E53BD4 /* CyberpunkTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD1D2F6E8A2300E53BD4 /* CyberpunkTheme.swift */; };
-		9AF7FD202F6E8A2400E53BD4 /* GlitchEffects.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD1F2F6E8A2400E53BD4 /* GlitchEffects.swift */; };
-		9AF7FD222F6E8A6900E53BD4 /* HandIllustrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD212F6E8A6900E53BD4 /* HandIllustrationView.swift */; };
-		9AF7FD242F6E8B6000E53BD4 /* CalibrationData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD232F6E8B6000E53BD4 /* CalibrationData.swift */; };
-		9AF7FD262F6E8C2000E53BD4 /* CalibrationWaveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD252F6E8C2000E53BD4 /* CalibrationWaveView.swift */; };
-		9AF7FD282F6E8C7E00E53BD4 /* CalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AF7FD272F6E8C7E00E53BD4 /* CalibrationView.swift */; };
 		CA000001000000000000000A /* VisionUI in Frameworks */ = {isa = PBXBuildFile; productRef = CA000002000000000000000A /* VisionUI */; };
 /* End PBXBuildFile section */
 
@@ -37,7 +27,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		9A30ACE52F7179F600D7E114 /* CalibrationAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationAnalyzer.swift; sourceTree = "<group>"; };
 		9A310A752F70048000E693C0 /* MLTrainingDataModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLTrainingDataModels.swift; sourceTree = "<group>"; };
 		9A310A762F7004EC00E693C0 /* main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = main.swift; sourceTree = "<group>"; };
 		9A310A812F7013FE00E693C0 /* MLModelDocumentation.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = MLModelDocumentation.md; sourceTree = "<group>"; };
@@ -46,7 +35,6 @@
 		9A310A8A2F7026AA00E693C0 /* train_quaternion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = train_quaternion.swift; sourceTree = "<group>"; };
 		9A310A8B2F7026B400E693C0 /* MLTrainingDataModels_Mac.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MLTrainingDataModels_Mac.swift; sourceTree = "<group>"; };
 		9A310A8C2F7026D200E693C0 /* ML_PIPELINE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = ML_PIPELINE.md; sourceTree = "<group>"; };
-		9A310A922F702FF200E693C0 /* GestureClassifier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GestureClassifier.swift; sourceTree = "<group>"; };
 		9A310A9A2F703F0200E693C0 /* train_distance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = train_distance.swift; sourceTree = "<group>"; };
 		9A310A9B2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = DISTANCE_MODEL_TRAINING.md; sourceTree = "<group>"; };
 		9A310A9D2F70403D00E693C0 /* convert_to_csv.py */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = convert_to_csv.py; sourceTree = "<group>"; };
@@ -55,14 +43,6 @@
 		9A9B4ABB2F6E3BAA00513B05 /* RealityKitContent */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = RealityKitContent; sourceTree = "<group>"; };
 		9A9B4ACB2F6E3BAB00513B05 /* handtypingTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = handtypingTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AEFFF3B2F71049700A20DBF /* AGENTS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = AGENTS.md; sourceTree = "<group>"; };
-		9AF7FD1B2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchDetectionImmersiveView.swift; sourceTree = "<group>"; };
-		9AF7FD1D2F6E8A2300E53BD4 /* CyberpunkTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CyberpunkTheme.swift; sourceTree = "<group>"; };
-		9AF7FD1F2F6E8A2400E53BD4 /* GlitchEffects.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlitchEffects.swift; sourceTree = "<group>"; };
-		9AF7FD212F6E8A6900E53BD4 /* HandIllustrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HandIllustrationView.swift; sourceTree = "<group>"; };
-		9AF7FD232F6E8B6000E53BD4 /* CalibrationData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationData.swift; sourceTree = "<group>"; };
-		9AF7FD252F6E8C2000E53BD4 /* CalibrationWaveView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationWaveView.swift; sourceTree = "<group>"; };
-		9AF7FD272F6E8C7E00E53BD4 /* CalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationView.swift; sourceTree = "<group>"; };
-		AB6110C2B10CCD0DCDEC4FD4 /* GesturePhaseTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GesturePhaseTracker.swift; sourceTree = "<group>"; };
 		CA000003000000000000000A /* VisionOS-UI-Framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper; path = "VisionOS-UI-Framework"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -134,22 +114,12 @@
 				9A9B4ABA2F6E3BAA00513B05 /* Packages */,
 				9A9B4ACE2F6E3BAB00513B05 /* handtypingTests */,
 				9A9B4AB82F6E3BAA00513B05 /* Products */,
-				9AF7FD1B2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift */,
-				9AF7FD1D2F6E8A2300E53BD4 /* CyberpunkTheme.swift */,
-				9AF7FD1F2F6E8A2400E53BD4 /* GlitchEffects.swift */,
-				9AF7FD212F6E8A6900E53BD4 /* HandIllustrationView.swift */,
-				9AF7FD232F6E8B6000E53BD4 /* CalibrationData.swift */,
-				9AF7FD252F6E8C2000E53BD4 /* CalibrationWaveView.swift */,
-				9AF7FD272F6E8C7E00E53BD4 /* CalibrationView.swift */,
 				9A310A742F70045100E693C0 /* MLTrainingTool 2 */,
 				9A310A812F7013FE00E693C0 /* MLModelDocumentation.md */,
 				9A310A832F70158A00E693C0 /* 训练步骤说明.md */,
 				9A310A8C2F7026D200E693C0 /* ML_PIPELINE.md */,
-				9A310A922F702FF200E693C0 /* GestureClassifier.swift */,
-				AB6110C2B10CCD0DCDEC4FD4 /* GesturePhaseTracker.swift */,
 				9A310A9B2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md */,
 				9AEFFF3B2F71049700A20DBF /* AGENTS.md */,
-				9A30ACE52F7179F600D7E114 /* CalibrationAnalyzer.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -266,12 +236,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				8D4D1FECBC3D4C93A5C52115 /* 2048.html in Resources */,
-				E0395181B9104534A21E9001 /* snake.html in Resources */,
-				F1B8C2D3A4E54F67B8D91234 /* tetris.html in Resources */,
-				A2C9D3E4B5F61078C9E02345 /* breakout.html in Resources */,
-				B3D0E4F5C6071189D0F13456 /* flappy.html in Resources */,
-				C4E1F506D718229AE1023567 /* runner.html in Resources */,
 				9A310A8D2F7026D200E693C0 /* ML_PIPELINE.md in Resources */,
 				9A310A9C2F703F0E00E693C0 /* DISTANCE_MODEL_TRAINING.md in Resources */,
 				9A310A842F70158A00E693C0 /* 训练步骤说明.md in Resources */,
@@ -294,16 +258,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				9AF7FD282F6E8C7E00E53BD4 /* CalibrationView.swift in Sources */,
-				9AF7FD202F6E8A2400E53BD4 /* GlitchEffects.swift in Sources */,
-				9A30ACE62F7179F600D7E114 /* CalibrationAnalyzer.swift in Sources */,
-				9AF7FD222F6E8A6900E53BD4 /* HandIllustrationView.swift in Sources */,
-				9AF7FD1C2F6E850400E53BD4 /* PinchDetectionImmersiveView.swift in Sources */,
-				9AF7FD1E2F6E8A2300E53BD4 /* CyberpunkTheme.swift in Sources */,
-				9A310A932F702FF200E693C0 /* GestureClassifier.swift in Sources */,
-				9911949AFFA93BB4C968ECE3 /* GesturePhaseTracker.swift in Sources */,
-				9AF7FD242F6E8B6000E53BD4 /* CalibrationData.swift in Sources */,
-				9AF7FD262F6E8C2000E53BD4 /* CalibrationWaveView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

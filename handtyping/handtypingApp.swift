@@ -12,15 +12,18 @@ import SwiftUI
 struct handtypingApp: App {
 
     @State private var model = HandViewModel()
+    @State private var gestureManager = GestureManager()
     @State private var session = GameSessionManager()
 
     var body: some Scene {
         WindowGroup {
             ContentView(session: session)
                 .environment(model)
+                .environment(gestureManager)
                 .onAppear {
                     model.loadActiveCalibration()
-                    session.start(with: model)
+                    gestureManager.bind(to: model)
+                    session.start(with: model, gestureManager: gestureManager)
                 }
         }
         .windowResizability(.contentSize)
@@ -29,6 +32,7 @@ struct handtypingApp: App {
         ImmersiveSpace(id: "pinchDetection") {
             PinchDetectionImmersiveView()
                 .environment(model)
+                .environment(gestureManager)
         }
         .immersionStyle(selection: .constant(.mixed), in: .mixed)
     }

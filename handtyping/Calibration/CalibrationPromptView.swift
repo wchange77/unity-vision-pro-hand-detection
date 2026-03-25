@@ -103,12 +103,12 @@ struct CalibrationPromptView: View {
         .frame(minWidth: 500, minHeight: 400)
         .onChange(of: session.navRouter.latestEvent) { _, event in
             guard let event else { return }
-            defer { session.navRouter.consumeEvent() }
-            handleNav(event)
+            handleNavEvent(event)
+            session.navRouter.consumeEvent()
         }
     }
 
-    private func handleNav(_ event: GameNavEvent) {
+    private func handleNavEvent(_ event: GameNavEvent) {
         switch event {
         case .up:
             focusedButton = 0
